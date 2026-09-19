@@ -1,4 +1,4 @@
-import { Folder, Loader2, MoreHorizontal, Pencil, Trash2, X } from 'lucide-react'
+import { Folder, Loader2, Minimize2, MoreHorizontal, Pencil, Trash2, X } from 'lucide-react'
 import { useThreads } from '@/hooks/useThreads'
 import { useIsThreadActive } from '@/hooks/useAppState'
 import { useChatSessions } from '@/stores/chat-session-store'
@@ -30,6 +30,7 @@ import { RenameThreadDialog, DeleteThreadDialog } from '@/containers/dialogs'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { ThreadMessage } from '@janhq/core'
+import { compressThreadReasoning } from '@/lib/compressThread'
 
 const ThreadItem = memo(
   ({
@@ -49,6 +50,7 @@ const ThreadItem = memo(
     const { t } = useTranslation()
     const [renameOpen, setRenameOpen] = useState(false)
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+    const [isCompressing, setIsCompressing] = useState(false)
 
     const serviceHub = useServiceHub()
     const getMessages = useMessages((state) => state.getMessages)
@@ -196,6 +198,28 @@ const ThreadItem = memo(
             <DropdownMenuItem onSelect={() => setRenameOpen(true)}>
               <Pencil className="size-4" />
               <span>{t('common:rename')}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={isCompressing || !thread.model}
+              onSelect={(e) => {
+                e.preventDefault()
+                if (isCompressing) return
+                setIsCompressing(true)
+                compressThreadReasoning(thread)
+                  .then(() => {
+                    toast.success('Thread compressed: compressed copy created in sidebar')
+                  })
+                  .catch((error) => {
+                    console.error('Compress thread failed:', error)
+                    toast.error('Compression failed: see console for details')
+                  })
+                  .finally(() => {
+                    setIsCompressing(false)
+                  })
+              }}
+            >
+              <Minimize2 className="size-4" />
+                    <span>{isCompressing ? 'Compressing...' : 'Compress thread'}</span>
             </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger className="gap-2">
