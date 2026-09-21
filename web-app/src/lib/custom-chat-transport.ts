@@ -1872,7 +1872,21 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
               }
               return part
             })
-            message.parts = parts
+            // Bug fix: do NOT mutate the original message object here. If the
+            // same UIMessage[] array is reused across turns (kept in
+            // in-memory/store state rather than rebuilt fresh from persisted
+            // thread data each time), mutating message.parts in place made
+            // this function non-idempotent: a later call would see its own
+            // previously-injected 'File: <name>\n<content>' text as part of
+            // 'base' and append ANOTHER copy on top of it. Over N turns this
+            // duplicated the attached file content N times in a single
+            // message, growing the prompt every turn and breaking
+            // llama.cpp / any OpenAI-compatible server KV-cache longest-common-
+            // prefix match at that point on every request. Returning a new
+            // object leaves the original message (and its parts) untouched,
+            // so re-running this mapper on the same in-memory message is a
+            // no-op beyond the first injection.
+            return { ...message, parts }
           }
         }
       }
