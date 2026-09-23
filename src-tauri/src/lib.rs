@@ -369,9 +369,9 @@ pub fn run() {
                     ])
                     .build(),
             )?;
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            //#[cfg(not(any(target_os = "ios", target_os = "android")))]
+            //app.handle()
+            //    .plugin(tauri_plugin_updater::Builder::new().build())?;
 
             // A Jan up to 0.8.4 leaves its llama-server router running across an
             // in-app update; that version cannot be fixed, so reap it here.
