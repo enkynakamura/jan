@@ -380,9 +380,9 @@ pub fn run() {
                     ])
                     .build(),
             )?;
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            //#[cfg(not(any(target_os = "ios", target_os = "android")))]
+            //app.handle()
+            //    .plugin(tauri_plugin_updater::Builder::new().build())?;
 
             // Reap engines a previous Jan left running: the llama-server router of
             // a 0.8.4 that was updated in place, or an mlx-server whose app was
