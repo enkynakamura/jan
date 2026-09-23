@@ -30,7 +30,52 @@ import { RenameThreadDialog, DeleteThreadDialog } from '@/containers/dialogs'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { ThreadMessage } from '@janhq/core'
-import { compressThreadReasoning } from '@/lib/compressThread'
+import {
+  compressThreadReasoning,
+  CompressionCancelled,
+  type CompressProgress,
+} from '@/lib/compressThread'
+import { Progress } from '@/components/ui/progress'
+import { Button } from '@/components/ui/button'
+
+/**
+ * Contenuto del toast di avanzamento della compressione: barra (lo stesso
+ * componente Progress delle barre di download di Jan) + blocchi fatti. Una
+ * sola misura (blocchi) per barra e numero: il contatore dei messaggi
+ * avanzava a gradini e confondeva.
+ */
+function CompressProgressToast({
+  progress,
+  onStop,
+}: {
+  progress: CompressProgress
+  onStop: () => void
+}) {
+  const pct =
+    progress.totalBlocks > 0
+      ? Math.round((progress.doneBlocks / progress.totalBlocks) * 100)
+      : 0
+  return (
+    <div className="bg-background border rounded-md shadow-md p-3 w-[356px] space-y-2">
+      <div className="flex items-center justify-between text-sm">
+        <span className="flex items-center gap-2">
+          <Loader2 className="size-4 animate-spin" />
+          Compressione thread
+        </span>
+        <span className="tabular-nums">{pct}%</span>
+      </div>
+      <Progress value={pct} />
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {progress.doneBlocks} di {progress.totalBlocks} blocchi
+        </span>
+        <Button variant="outline" size="xs" onClick={onStop}>
+          Interrompi
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 const ThreadItem = memo(
   ({
@@ -205,13 +250,47 @@ const ThreadItem = memo(
                 e.preventDefault()
                 if (isCompressing) return
                 setIsCompressing(true)
-                compressThreadReasoning(thread)
-                  .then(() => {
-                    toast.success('Thread compressed: compressed copy created in sidebar')
+                const toastId = `compress-${thread.id}`
+                const stopController = new AbortController()
+                let last: CompressProgress | undefined
+                compressThreadReasoning(
+                  thread,
+                  (progress) => {
+                    last = progress
+                    toast.custom(
+                      () => (
+                        <CompressProgressToast
+                          progress={progress}
+                          onStop={() => stopController.abort()}
+                        />
+                      ),
+                      { id: toastId, duration: Infinity }
+                    )
+                  },
+                  stopController.signal
+                )
+                  .then(({ stats }) => {
+                    toast.dismiss(toastId)
+                    toast.success(
+                      `Thread compressed: ${stats.retries} retry, ${stats.marked} troncati`
+                    )
                   })
                   .catch((error) => {
+                    toast.dismiss(toastId)
+                    if (error instanceof CompressionCancelled) {
+                      toast.info(
+                        error.reason === 'stop'
+                          ? 'Compressione interrotta: thread parziale eliminato'
+                          : 'Compressione interrotta: thread eliminato'
+                      )
+                      return
+                    }
                     console.error('Compress thread failed:', error)
-                    toast.error('Compression failed: see console for details')
+                    toast.error(
+                      last
+                        ? `Compression failed at block ${last.doneBlocks}/${last.totalBlocks}: see console`
+                        : 'Compression failed: see console for details'
+                    )
                   })
                   .finally(() => {
                     setIsCompressing(false)

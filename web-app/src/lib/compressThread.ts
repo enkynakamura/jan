@@ -9,8 +9,9 @@
 // Verificato contro il sorgente reale di janhq/jan (branch dev, letto il
 // 2026-09-19): ModelFactory.createModel, getProviderByName, useThreads,
 // getServiceHub().messages(), il tipo ThreadContent/ContentType.Reasoning.
-// NON eseguito/compilato in questo ambiente: nessun Tauri/build locale
-// disponibile qui. Va buildato e testato sul tuo PC prima di fidarsene.
+// Testato in dev mode (make dev) sul thread NasdaqPredictor il 2026-09-21/22.
+// Il typecheck completo (tsc -b, eseguito da `yarn build`) NON e' stato
+// verificato: va controllato sulla build release, il dev mode non lo esegue.
 
 import { generateText } from 'ai'
 import { ulid } from 'ulidx'
@@ -18,30 +19,24 @@ import { ContentType, type ThreadMessage } from '@janhq/core'
 import { ModelFactory } from '@/lib/model-factory'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { useThreads } from '@/hooks/useThreads'
+import { useMessages } from '@/hooks/useMessages'
 import { getServiceHub } from '@/hooks/useServiceHub'
 
 /**
- * Modello usato SOLO per comprimere i blocchi di reasoning - deliberatamente
- * diverso da thread.model (il modello principale della conversazione).
- * Un compito di puro riassunto non ha bisogno della potenza del modello
- * principale, e usare un modello piccolo separato evita di dover
- * scaricare/ricaricare il modello principale ad ogni compressione.
+ * Modello usato per comprimere. null = lo stesso modello del thread (il
+ * modello principale della conversazione), che e' l'impostazione attuale.
  *
- * `id` deve corrispondere esattamente al Model.id come appare nella lista
- * modelli di Jan per il provider indicato (verificabile nell'icona
- * ingranaggio del modello, o nel file di config del provider su disco).
- * `provider` è il nome provider così come appare in useModelProvider
- * (per un modello scaricato dall'Hub di Jan è quasi certamente 'llamacpp' -
- * il motore interno di Jan, DIVERSO dal provider custom che punta al tuo
- * server ik_llama.cpp su cui gira il modello principale).
+ * Storia: fino al 2026-09-23 si usava un modello piccolo separato
+ * ({ id: 'Jan-v3_5-4B', provider: 'llamacpp' }, il motore interno di Jan).
+ * Misurato su NasdaqPredictor: non seguiva l'istruzione "un decimo"
+ * (lunghezza mediana dei riassunti ~2.8x il target) e in 11 blocchi su 52
+ * produceva generazioni anomale da rigenerare. Per tornare a quel modello,
+ * rimettere qui quell'oggetto.
  *
- * Consiglio pratico: nell'icona ingranaggio di QUESTO modello, imposta
- * GPU Layers a 0 (esecuzione CPU-only) - un 1-3B su un compito di
- * riassunto testuale corto è comunque veloce su CPU, e non contende VRAM
- * col modello principale che probabilmente la occupa già quasi tutta.
+ * Con null, mentre la compressione gira il server del modello principale e'
+ * occupato, e la sua cache di prompt del thread originale viene persa.
  */
-const SUMMARY_MODEL_ID = 'Qwen3_5-4B-Q3_K_M'
-const SUMMARY_MODEL_PROVIDER = 'llamacpp'
+const SUMMARY_MODEL_OVERRIDE: ThreadModel | null = null
 
 /**
  * Sotto questa lunghezza (caratteri), la PROSA di un blocco di reasoning
@@ -65,45 +60,6 @@ const COMPRESSION_SYSTEM_PROMPT = [
   'a list of 6 items must produce an output list of 6 items.',
   'Output only the compressed text, no preamble, no quotation marks.',
 ].join(' ')
-
-/**
- * Rileva righe di lista numerata o puntata (1. / - / * / •) nel blocco di
- * prosa, per garantire nel budget di token qui sotto uno spazio minimo per
- * voce. Senza questo, un blocco con molte voci brevi ("ho verificato:
- * 1,2,3,4,5,6") veniva ridotto dal modello a una frase generica che ne
- * cancellava la maggior parte - misurato su due thread di test reali: 182
- * voci di lista nell'originale, 9 sopravvissute alla compressione (5%).
- */
-const LIST_ITEM_REGEX = /^\s*(\d+\.|[-*•])\s+\S/gm
-
-/**
- * Stima grezza dei token del blocco di prosa in ingresso, per calcolare un
- * tetto massimo di output PROPORZIONALE (target ~10x di compressione,
- * coerente con il rapporto già misurato e validato sulla versione per la
- * webui di llama.cpp - non un numero fisso indipendente dalla lunghezza).
- * ~4 caratteri per token è una stima approssimativa (testo misto
- * italiano/inglese/codice), non una misura esatta - usata solo per
- * dimensionare il tetto di sicurezza, non per un conteggio preciso.
- *
- * Se il blocco contiene una lista, il target proporzionale da solo non basta
- * mai a contenere tutte le voci (8 voci in ~40 token è impossibile anche
- * accorciate all'osso): listFloor alza il tetto in proporzione al numero di
- * voci rilevate, indipendentemente dal ratio 1/10 generale. 12 token/voce è
- * una stima empirica (frase breve + numerazione), non misurata sul tuo
- * modello specifico - da rivedere se le voci escono troncate nel retest.
- */
-function estimateMaxSummaryTokens(prose: string): number {
-  const estimatedInputTokens = Math.ceil(prose.length / 4)
-  const target = Math.round(estimatedInputTokens / 10)
-  const listItemCount = (prose.match(LIST_ITEM_REGEX) || []).length
-  const listFloor = listItemCount > 0 ? listItemCount * 12 + 20 : 0
-  // Pavimento: anche un blocco piccolo merita almeno una frase compiuta.
-  // Soffitto: rete di sicurezza tecnica contro un'altra fuga come quella da
-  // 5360 token osservata - un blocco da decine di migliaia di token non deve
-  // MAI generare un output che si avvicina a quella cifra, qualunque cosa
-  // dica il prompt.
-  return Math.min(800, Math.max(40, target, listFloor))
-}
 
 /**
  * Blocchi di codice recintati (```...```) dentro un reasoning trace. Non
@@ -145,6 +101,51 @@ function stripThinkingTags(raw: string): string {
 }
 
 /**
+ * Tetto del retry: il doppio del primo tentativo.
+ */
+const MAX_RETRY_TOKENS = 1600
+
+/**
+ * Tetto del primo tentativo. Fisso, non proporzionale alla lunghezza del
+ * blocco. Misure fatte col modello 4B (vedi SUMMARY_MODEL_OVERRIDE), non
+ * ancora col modello principale: Jan-v3_5-4B non rispetta un rapporto di compressione dato nel
+ * prompt, e un tetto proporzionale (~1/10) lo tagliava a meta' frase
+ * (run 2026-09-22: 45 retry, 33 blocchi su 52 marcati). Con 800 fisso
+ * (run 2026-09-23): 41 blocchi su 52 finiti da soli (mediana 416 token),
+ * 11 retry, 0 marcati, compressione complessiva del reasoning 5.9x.
+ * 800 non e' ottimizzato: e' il valore testato. Resta basso abbastanza da
+ * interrompere presto una generazione anomala (ripetizioni), che il retry
+ * rigenera da capo.
+ */
+const FIRST_ATTEMPT_TOKENS = 800
+
+/**
+ * Appeso a un riassunto tagliato anche dopo il retry, perche' chi legge il
+ * thread compresso sappia che quel blocco e' incompleto.
+ */
+const TRUNCATION_MARKER = ' [...troncato]'
+
+/**
+ * Rileva il taglio da maxOutputTokens confrontando i token generati col
+ * tetto richiesto, NON leggendo finishReason: llama.cpp ha un bug noto e
+ * aperto (ggml-org/llama.cpp issue #8856) per cui l'endpoint
+ * OpenAI-compatibile puo' riportare "stop" anche quando ha tagliato per
+ * max_tokens. Confronto esatto, senza margine di tolleranza: su 44 chiamate
+ * reali (2026-09-21) ogni taglio aveva outputTokens identico al tetto, e
+ * ogni fine naturale restava sotto. outputTokens mancante rende il taglio
+ * non rilevabile: fail-fast invece di assumere che il blocco sia completo.
+ */
+function hitTokenCap(outputTokens: number | undefined, cap: number): boolean {
+  if (outputTokens === undefined) {
+    throw new Error(
+      'usage.outputTokens non riportato dal provider di riepilogo: ' +
+        'impossibile rilevare se il riassunto e\' stato troncato.'
+    )
+  }
+  return outputTokens >= cap
+}
+
+/**
  * Comprime la sola prosa di un blocco di reasoning; il codice (se presente)
  * è già stato tolto da splitCodeFromProse e viene riattaccato dal chiamante,
  * verbatim, dopo. Una chiamata al modello per blocco - più semplice da
@@ -155,47 +156,78 @@ function stripThinkingTags(raw: string): string {
  * diventa un problema pratico, tornare al pattern batched è il prossimo
  * passo naturale.
  */
-async function compressProseBlock(prose: string): Promise<string> {
+async function compressProseBlock(
+  prose: string,
+  summaryModel: ThreadModel,
+  stats: CompressStats,
+  signal: AbortSignal
+): Promise<string> {
   const provider = useModelProvider
     .getState()
-    .getProviderByName(SUMMARY_MODEL_PROVIDER)
+    .getProviderByName(summaryModel.provider)
   if (!provider) {
     throw new Error(
-      `Provider di riepilogo non trovato: ${SUMMARY_MODEL_PROVIDER}`
+      `Provider di riepilogo non trovato: ${summaryModel.provider}`
     )
   }
   // CAUSA VERA dei riassunti vuoti osservati nel test: Qwen3.5 è un modello
   // "pensante" - scrive un blocco <think>...</think> prima della risposta.
-  // Con un tetto di token stretto (vedi estimateMaxSummaryTokens), il
+  // Con un tetto di token stretto, il
   // pensiero consuma tutto il budget e non resta nulla per il riassunto
   // vero. Stesso fix già usato da Jan in thread-title-summarizer.ts per lo
   // stesso tipo di modello, per lo stesso tipo di compito (poco testo in
   // uscita da un modello Qwen3).
-  const parameters: Record<string, unknown> = {}
-  if (SUMMARY_MODEL_PROVIDER === 'llamacpp') {
-    parameters.chat_template_kwargs = { enable_thinking: false }
+  //
+  // Inviato a qualunque provider, non solo 'llamacpp': anche il server del
+  // modello principale (llama_local) e' llama.cpp mainline, che applica
+  // chat_template_kwargs.enable_thinking per singola richiesta. Un provider
+  // remoto che non conosce il campo potrebbe rifiutarlo: da rivedere se si
+  // comprime un thread con un modello remoto.
+  const parameters: Record<string, unknown> = {
+    chat_template_kwargs: { enable_thinking: false },
   }
   // ModelFactory.createModel, per provider 'llamacpp', avvia il modello se
   // non è già in esecuzione (vedi createLlamaCppModel -> startModel) - non
   // serve gestirlo a mano qui.
   const model = await ModelFactory.createModel(
-    SUMMARY_MODEL_ID,
+    summaryModel.id,
     provider,
     parameters
   )
 
-  const { text: summary } = await generateText({
-    model,
-    system: COMPRESSION_SYSTEM_PROMPT,
-    prompt: prose,
-    // Tetto proporzionale alla lunghezza del blocco (vedi
-    // estimateMaxSummaryTokens), non un numero fisso: previene un'altra fuga
-    // come quella da 5360 token osservata, senza tagliare ingiustamente i
-    // blocchi grandi a una manciata di parole indipendentemente dal contenuto.
-    maxOutputTokens: estimateMaxSummaryTokens(prose),
-  })
+  const generate = (maxOutputTokens: number) =>
+    generateText({
+      model,
+      system: COMPRESSION_SYSTEM_PROMPT,
+      prompt: prose,
+      maxOutputTokens,
+      // Interrompe anche la generazione in corso, non solo il ciclo: senza,
+      // uno stop aspetterebbe la fine del blocco (fino a 1600 token).
+      abortSignal: signal,
+    })
 
-  return stripThinkingTags(summary)
+  const cap = FIRST_ATTEMPT_TOKENS
+  let result = await generate(cap)
+  if (!hitTokenCap(result.usage.outputTokens, cap)) {
+    return stripThinkingTags(result.text)
+  }
+
+  // Tetto colpito: un solo retry con tetto doppio. Se taglia anche quello il
+  // blocco viene restituito con un marcatore visibile, mai spacciato per
+  // completo, invece di rincorrere il tetto all'infinito.
+  const retryCap = Math.min(MAX_RETRY_TOKENS, cap * 2)
+  stats.retries++
+  console.warn(`[compress] tetto colpito (cap=${cap}), retry con ${retryCap}`)
+  result = await generate(retryCap)
+  const summary = stripThinkingTags(result.text)
+  if (!hitTokenCap(result.usage.outputTokens, retryCap)) {
+    return summary
+  }
+  console.warn(
+    `[compress] tetto colpito anche al retry (cap=${retryCap}), blocco marcato`
+  )
+  stats.marked++
+  return summary ? summary + TRUNCATION_MARKER : ''
 }
 
 /**
@@ -204,14 +236,24 @@ async function compressProseBlock(prose: string): Promise<string> {
  * codice INTATTO in coda. Se non c'è prosa sopra soglia (blocco fatto quasi
  * solo di codice, o già corto), il testo originale non viene toccato.
  */
-async function compressReasoningBlock(text: string): Promise<string> {
+async function compressReasoningBlock(
+  text: string,
+  summaryModel: ThreadModel,
+  stats: CompressStats,
+  signal: AbortSignal
+): Promise<string> {
   const { prose, codeBlocks } = splitCodeFromProse(text)
 
   if (prose.trim().length < MIN_PROSE_LENGTH) {
     return text
   }
 
-  const compressedProse = await compressProseBlock(prose)
+  const compressedProse = await compressProseBlock(
+    prose,
+    summaryModel,
+    stats,
+    signal
+  )
 
   // Ultima rete di sicurezza, non più la protezione principale ora che la
   // causa vera (thinking mode non disattivato) è corretta sopra: un
@@ -228,25 +270,52 @@ async function compressReasoningBlock(text: string): Promise<string> {
 }
 
 /**
+ * Lanciata quando la compressione viene interrotta: 'stop' = pulsante
+ * Interrompi (il thread parziale viene eliminato qui), 'deleted' = l'utente
+ * ha eliminato il thread in compressione dalla sidebar.
+ */
+export class CompressionCancelled extends Error {
+  constructor(readonly reason: 'stop' | 'deleted') {
+    super(`Compressione interrotta (${reason})`)
+    this.name = 'CompressionCancelled'
+  }
+}
+
+/** Retry e blocchi marcati durante una compressione. */
+export type CompressStats = { retries: number; marked: number }
+
+/**
+ * Avanzamento riportato dopo ogni blocco di reasoning e dopo ogni messaggio
+ * scritto. `doneChars/totalChars` pesa i blocchi per lunghezza: un blocco da
+ * 36.000 caratteri richiede molto piu' tempo di uno da 400, quindi la
+ * percentuale sui caratteri segue il tempo meglio del conteggio dei blocchi.
+ * Resta un'approssimazione: il tempo per blocco non e' proporzionale ai
+ * caratteri (tetto fisso di output, retry).
+ */
+export type CompressProgress = {
+  doneBlocks: number
+  totalBlocks: number
+  doneMessages: number
+  totalMessages: number
+  doneChars: number
+  totalChars: number
+}
+
+/**
  * Clona `thread` in un nuovo thread, comprimendo la prosa dei blocchi di
  * reasoning dei messaggi assistant (codice sempre lasciato intatto - vedi
  * splitCodeFromProse). Ritorna il nuovo Thread creato (già inserito nello
  * store useThreads, quindi visibile in sidebar).
  */
-export async function compressThreadReasoning(thread: Thread): Promise<Thread> {
+export async function compressThreadReasoning(
+  thread: Thread,
+  onProgress?: (progress: CompressProgress) => void,
+  stopSignal?: AbortSignal
+): Promise<{ thread: Thread; stats: CompressStats }> {
   if (!thread.model) {
     throw new Error('Il thread non ha un modello assegnato')
   }
-  // Fail-fast esplicito: niente fallback silenzioso sul modello principale
-  // se il modello di riepilogo non è configurato - un fallback silenzioso
-  // vanificherebbe lo scopo (velocità) senza che l'utente se ne accorga.
-  if (!SUMMARY_MODEL_ID) {
-    throw new Error(
-      'SUMMARY_MODEL_ID non configurato in compressThread.ts: scarica il ' +
-        'modello di riepilogo dall\'Hub di Jan e imposta il suo id esatto ' +
-        'nella costante in cima al file.'
-    )
-  }
+  const summaryModel = SUMMARY_MODEL_OVERRIDE ?? thread.model
 
   const serviceHub = getServiceHub()
 
@@ -254,6 +323,22 @@ export async function compressThreadReasoning(thread: Thread): Promise<Thread> {
   // conversazione completa anche se il thread non è quello attivo aperto.
   const originalMessages =
     (await serviceHub.messages().fetchMessages(thread.id)) ?? []
+
+  const stats: CompressStats = { retries: 0, marked: 0 }
+  const reasoningTexts = originalMessages.flatMap((m) =>
+    m.content
+      .filter((part) => part.type === ContentType.Reasoning && part.text)
+      .map((part) => part.text!.value)
+  )
+  const progress: CompressProgress = {
+    doneBlocks: 0,
+    totalBlocks: reasoningTexts.length,
+    doneMessages: 0,
+    totalMessages: originalMessages.length,
+    doneChars: 0,
+    totalChars: reasoningTexts.reduce((sum, t) => sum + t.length, 0),
+  }
+  onProgress?.({ ...progress })
 
   // Preserva appartenenza al progetto e assistant personalizzato
   // dell'originale - createThread altrimenti crea il compresso fuori da
@@ -263,7 +348,7 @@ export async function compressThreadReasoning(thread: Thread): Promise<Thread> {
     .getState()
     .createThread(
       thread.model,
-      `[compresso] ${thread.title ?? ''}`.trim(),
+      `[compressione in corso] ${thread.title ?? ''}`.trim(),
       thread.assistants?.[0],
       thread.metadata?.project
     )
@@ -284,44 +369,118 @@ export async function compressThreadReasoning(thread: Thread): Promise<Thread> {
     oldIdToNewId.set(message.id, ulid())
   }
 
-  for (const message of originalMessages) {
-    // Un blocco alla volta, MAI in parallelo (niente Promise.all): chiamate
-    // concorrenti allo stesso modello hanno prodotto blocchi vuoti in modo
-    // intermittente durante il test (pattern osservato: alcuni blocchi
-    // riassunti correttamente, altri diventati stringhe vuote, senza un
-    // errore visibile in console) - sequenziale è più lento ma affidabile.
-    const compressedContent = []
-    for (const part of message.content) {
-      if (part.type === ContentType.Reasoning && part.text) {
-        const summary = await compressReasoningBlock(part.text.value)
-        compressedContent.push({ ...part, text: { ...part.text, value: summary } })
-      } else {
-        compressedContent.push(part)
-      }
+  // Un solo segnale interno, alimentato da due fonti: il pulsante
+  // Interrompi (stopSignal) e l'eliminazione del thread in compressione
+  // dalla sidebar (sottoscrizione allo store). Senza la seconda, eliminare
+  // il thread lasciava il ciclo girare fino alla fine a vuoto (le scritture
+  // su un thread inesistente falliscono in silenzio in createMessage) e
+  // chiudeva con un falso "Thread compressed".
+  const controller = new AbortController()
+  const onStop = () => controller.abort(new CompressionCancelled('stop'))
+  if (stopSignal?.aborted) onStop()
+  stopSignal?.addEventListener('abort', onStop, { once: true })
+  const unsubscribe = useThreads.subscribe((state) => {
+    if (!state.threads[newThread.id]) {
+      controller.abort(new CompressionCancelled('deleted'))
     }
-
-    const oldMeta = message.metadata as
-      | { parentId?: string; activeChildId?: string }
-      | undefined
-
-    const newMetadata: Record<string, unknown> = { ...message.metadata }
-    if (oldMeta?.parentId) {
-      newMetadata.parentId = oldIdToNewId.get(oldMeta.parentId)
-    }
-    if (oldMeta?.activeChildId) {
-      newMetadata.activeChildId = oldIdToNewId.get(oldMeta.activeChildId)
-    }
-
-    const clonedMessage: ThreadMessage = {
-      ...message,
-      id: oldIdToNewId.get(message.id)!,
-      thread_id: newThread.id,
-      content: compressedContent,
-      metadata: newMetadata,
-    }
-
-    await serviceHub.messages().createMessage(clonedMessage)
+  })
+  const throwIfCancelled = () => {
+    if (controller.signal.aborted) throw controller.signal.reason
   }
 
-  return newThread
+  // Raccolta dei messaggi clonati man mano che vengono scritti, per poterli
+  // spingere di peso nello store React alla fine (vedi sotto perché serve).
+  // Fuori dal try: serve anche dopo, per setMessages.
+  const clonedMessages: ThreadMessage[] = []
+
+  try {
+    for (const message of originalMessages) {
+      // Un blocco alla volta, MAI in parallelo (niente Promise.all): chiamate
+      // concorrenti allo stesso modello hanno prodotto blocchi vuoti in modo
+      // intermittente durante il test (pattern osservato: alcuni blocchi
+      // riassunti correttamente, altri diventati stringhe vuote, senza un
+      // errore visibile in console) - sequenziale è più lento ma affidabile.
+      const compressedContent = []
+      for (const part of message.content) {
+        if (part.type === ContentType.Reasoning && part.text) {
+          throwIfCancelled()
+          const summary = await compressReasoningBlock(
+            part.text.value,
+            summaryModel,
+            stats,
+            controller.signal
+          )
+          compressedContent.push({ ...part, text: { ...part.text, value: summary } })
+          progress.doneBlocks++
+          progress.doneChars += part.text.value.length
+          onProgress?.({ ...progress })
+        } else {
+          compressedContent.push(part)
+        }
+      }
+
+      const oldMeta = message.metadata as
+        | { parentId?: string; activeChildId?: string }
+        | undefined
+
+      const newMetadata: Record<string, unknown> = { ...message.metadata }
+      if (oldMeta?.parentId) {
+        newMetadata.parentId = oldIdToNewId.get(oldMeta.parentId)
+      }
+      if (oldMeta?.activeChildId) {
+        newMetadata.activeChildId = oldIdToNewId.get(oldMeta.activeChildId)
+      }
+
+      const clonedMessage: ThreadMessage = {
+        ...message,
+        id: oldIdToNewId.get(message.id)!,
+        thread_id: newThread.id,
+        content: compressedContent,
+        metadata: newMetadata,
+      }
+
+      throwIfCancelled()
+      await serviceHub.messages().createMessage(clonedMessage)
+      clonedMessages.push(clonedMessage)
+      progress.doneMessages++
+      onProgress?.({ ...progress })
+    }
+
+  } catch (error) {
+    // Un abort durante generateText arriva come errore dell'SDK, non come
+    // CompressionCancelled: il motivo vero e' nel segnale.
+    const cause = controller.signal.aborted ? controller.signal.reason : error
+    if (cause instanceof CompressionCancelled && cause.reason === 'stop') {
+      unsubscribe()
+      useThreads.getState().deleteThread(newThread.id)
+    }
+    throw cause
+  } finally {
+    unsubscribe()
+    stopSignal?.removeEventListener('abort', onStop)
+  }
+
+  // createThread() sopra imposta subito currentThreadId sul thread nuovo
+  // (ancora vuoto in quel momento) - questo fa navigare l'app sulla route
+  // del thread compresso PRIMA che il ciclo qui sopra finisca di scrivere i
+  // messaggi. $threadId.tsx fa un fetch immediato (vede 0-1 messaggi), lo
+  // marca come già "visitato" con un ref interno, e quella guardia impedisce
+  // un refetch quando l'utente ci torna dentro più tardi - anche se nel
+  // frattempo il thread si è riempito su disco. Bug osservato empiricamente:
+  // il thread compresso mostrava solo il primo messaggio anche dopo essere
+  // uscito e rientrato, pur avendo tutti i messaggi corretti su disco
+  // (verificato via messages.jsonl). Si spinge lo stato finale direttamente
+  // nello store React in memoria: il componente già montato lo rilegge in
+  // modo reattivo, a prescindere da quella guardia.
+  useMessages.getState().setMessages(newThread.id, clonedMessages)
+
+  // Rinomina solo ora che tutti i messaggi sono scritti: un thread
+  // interrotto a meta' (errore, app chiusa, PC ibernato - successo il
+  // 2026-09-21, rimasto a 21/28 messaggi senza alcun errore nel log) resta
+  // riconoscibile dal titolo "[compressione in corso]" invece di sembrare
+  // completo.
+  const finalTitle = `[compresso] ${thread.title ?? ''}`.trim()
+  useThreads.getState().updateThread(newThread.id, { title: finalTitle })
+
+  return { thread: { ...newThread, title: finalTitle }, stats }
 }
