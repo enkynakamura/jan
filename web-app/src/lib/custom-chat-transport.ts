@@ -44,18 +44,13 @@ import {
 import { useAppState, type ModelLoadProgress } from '@/hooks/useAppState'
 import { unloadLlamaModel, getLoadedModels } from '@janhq/tauri-plugin-llamacpp-api'
 import { engineFailure } from '@/lib/engineError'
-import { ExtensionManager } from '@/lib/extension'
 import { getLlamacppExtension } from '@/lib/llamacppRouterProps'
 import {
   tokensForThinkingBudgetLevel,
   isThinkingBudgetLevelKey,
 } from '@/lib/thinkingBudget'
 import { buildReasoningProviderOptions } from '@/lib/reasoningProviderOptions'
-import {
-  ExtensionTypeEnum,
-  VectorDBExtension,
-  type MCPTool,
-} from '@janhq/core'
+import { type MCPTool } from '@janhq/core'
 import {
   trimMessages,
   compactMessages,
@@ -1045,18 +1040,9 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
 
         const projectId = thread?.metadata?.project?.id
         if (projectId) {
-          try {
-            const ext = ExtensionManager.getInstance().get<VectorDBExtension>(
-              ExtensionTypeEnum.VectorDB
-            )
-            if (ext?.listAttachmentsForProject) {
-              const projectFiles = await ext.listAttachmentsForProject(projectId)
-              hasDocuments = hasThreadDocuments || projectFiles.length > 0
-            }
-          } catch (error) {
-            console.warn('Failed to check project files:', error)
-            hasDocuments = hasThreadDocuments
-          }
+          // fork: nei thread di progetto i tool RAG sono sempre offerti, cosi'
+          // aggiungere documenti a thread avviato non cambia il prefisso del prompt
+          hasDocuments = true
         } else {
           hasDocuments = hasThreadDocuments
         }
