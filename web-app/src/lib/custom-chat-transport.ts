@@ -1768,7 +1768,13 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
    * defeat prompt caching.
    */
   buildFilesSystemInstruction(messages: UIMessage[]): string {
-    const hasAttachedFiles = messages.some(
+    // fork: nei thread di progetto l'istruzione e' sempre presente, cosi' il
+    // primo allegato non cambia il prefisso del prompt
+    const thread = this.threadId
+      ? useThreads.getState().threads[this.threadId]
+      : undefined
+    const inProject = Boolean(thread?.metadata?.project?.id)
+    const hasAttachedFiles = inProject || messages.some(
       (message) =>
         message.role === 'user' &&
         Array.isArray(message.parts) &&

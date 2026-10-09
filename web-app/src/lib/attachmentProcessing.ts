@@ -280,15 +280,14 @@ export const processAttachmentsForSend = async (
       notifyUpdate(doc.name, 'processing')
 
       const targetPreference = doc.parseMode ?? parsePreference
-      // Project files always use embeddings, never inline. 'prompt' documents
-      // carry the user's pick in parseMode, so reaching here means no pick
-      // was recorded and the safe default applies.
+      // fork: anche nei thread di progetto la scelta inline/embeddings resta
+      // all'utente; solo gli embeddings finiscono nella collection del progetto.
+      // 'prompt' documents carry the user's pick in parseMode, so reaching here
+      // means no pick was recorded and the safe default applies.
       const decideBySize =
-        !projectId &&
         targetPreference === 'auto' &&
         effectiveContextThreshold !== undefined
-      const wantsInline =
-        !projectId && (targetPreference === 'inline' || decideBySize)
+      const wantsInline = targetPreference === 'inline' || decideBySize
       let targetMode: 'inline' | 'embeddings' = 'embeddings'
       let parsedContent: string | undefined
 
