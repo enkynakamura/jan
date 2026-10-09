@@ -150,9 +150,27 @@ describe('processAttachmentsForSend', () => {
       expect(hub.uploads().ingestFileAttachment).not.toHaveBeenCalled()
     })
 
-    it('forces embeddings for project files', async () => {
+    // fork: nei thread di progetto la scelta inline/embeddings resta all'utente
+    it('keeps inline choice for project threads', async () => {
       const hub = createMockServiceHub()
       const doc = docAttachment({ parseMode: 'inline' })
+
+      const result = await processAttachmentsForSend({
+        attachments: [doc],
+        threadId,
+        projectId: 'proj-1',
+        serviceHub: hub as any,
+        parsePreference: 'auto',
+      })
+
+      expect(result.processedAttachments[0].injectionMode).toBe('inline')
+      expect(result.processedAttachments[0].inlineContent).toBe('parsed document text')
+      expect(hub.uploads().ingestFileAttachmentForProject).not.toHaveBeenCalled()
+    })
+
+    it('ingests project-thread embeddings into the project collection', async () => {
+      const hub = createMockServiceHub()
+      const doc = docAttachment({ parseMode: 'embeddings' })
 
       const result = await processAttachmentsForSend({
         attachments: [doc],

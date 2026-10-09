@@ -1065,8 +1065,9 @@ function ThreadDetail() {
             for (const toolName of ragTools) {
               toolApproval.approveToolForThread(threadId, toolName)
             }
+            // fork: fondere i metadata, altrimenti il thread perde il progetto
             useThreads.getState().updateThread(threadId, {
-              metadata: { hasDocuments: true },
+              metadata: { ...(thread?.metadata ?? {}), hasDocuments: true },
             })
           }
         } catch (error) {

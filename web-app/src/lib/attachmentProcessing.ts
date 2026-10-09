@@ -198,12 +198,9 @@ export const processAttachmentsForSend = async (
         targetPreference === 'inline' ? 'inline' : 'embeddings'
       let parsedContent: string | undefined
 
-      // Project files always use embeddings, never inline
-      if (projectId) {
-        targetMode = 'embeddings'
-      }
-
-      const canInline = !projectId && targetPreference !== 'embeddings' && !!doc.path
+      // fork: anche nei thread di progetto la scelta inline/embeddings resta
+      // all'utente; solo gli embeddings finiscono nella collection del progetto
+      const canInline = targetPreference !== 'embeddings' && !!doc.path
 
       if (canInline) {
         try {
@@ -218,12 +215,11 @@ export const processAttachmentsForSend = async (
       if (targetPreference === 'auto') {
         // Check if user made a per-file choice for this document
         const userChoice = perFileChoices?.get(doc.path || '')
-        // Project files always use embeddings
-        const effectiveMode = projectId ? 'embeddings' : (userChoice ?? autoFallbackMode ?? 'embeddings')
+        const effectiveMode = userChoice ?? autoFallbackMode ?? 'embeddings'
         targetMode = effectiveMode
 
-        // Only do auto-detection if no user choice was made and not project file
-        if (!projectId && !userChoice && parsedContent && estimateTokens) {
+        // Only do auto-detection if no user choice was made
+        if (!userChoice && parsedContent && estimateTokens) {
           const estimatedTokens = await estimateTokens(parsedContent)
           const tokenCount =
             typeof estimatedTokens === 'number' &&
@@ -243,11 +239,11 @@ export const processAttachmentsForSend = async (
               `Attachment ${doc.name}: token estimate unavailable or non-positive; defaulting to ${targetMode}`
             )
           }
-        } else if (!projectId && !userChoice && !parsedContent) {
+        } else if (!userChoice && !parsedContent) {
           console.debug(
             `Attachment ${doc.name}: parsed content unavailable for token estimation; defaulting to ${targetMode}`
           )
-        } else if (!projectId && !userChoice) {
+        } else if (!userChoice) {
           console.debug(
             `Attachment ${doc.name}: token estimator unavailable; defaulting to ${targetMode}`
           )
@@ -255,8 +251,7 @@ export const processAttachmentsForSend = async (
       } else if (targetPreference === 'prompt') {
         // Check if user made a per-file choice for this document
         const userChoice = perFileChoices?.get(doc.path || '')
-        // Project files always use embeddings
-        targetMode = projectId ? 'embeddings' : (userChoice ?? autoFallbackMode ?? 'embeddings')
+        targetMode = userChoice ?? autoFallbackMode ?? 'embeddings'
       }
 
       if (targetMode === 'inline' && parsedContent) {
