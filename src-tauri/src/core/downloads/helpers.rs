@@ -22,6 +22,9 @@ use url::Url;
 const JAN_MIRROR_PREFIX_STABLE: &str = "https://apps.jan.ai/";
 const JAN_MIRROR_PREFIX_NIGHTLY: &str = "https://apps-nightly.jan.ai/";
 
+/// fork: never route downloads through the Jan mirror, go straight to the source
+const JAN_MIRROR_ENABLED: bool = false;
+
 /// Domains that should use mirror download with fallback
 const MIRROR_DOMAINS: &[&str] = &["huggingface.co"];
 
@@ -748,7 +751,7 @@ pub async fn _get_maybe_resume_with_fallback(
     start_bytes: u64,
 ) -> Result<(reqwest::Response, String), String> {
     // Try mirror URL first if applicable
-    if let Some(mirror_url) = convert_to_mirror_url(url) {
+    if let Some(mirror_url) = convert_to_mirror_url(url).filter(|_| JAN_MIRROR_ENABLED) {
         log::info!("Attempting download from Jan mirror: {}", mirror_url);
         match _get_maybe_resume_with_hmac(client, &mirror_url, start_bytes).await {
             Ok(resp) => {

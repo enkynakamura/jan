@@ -51,6 +51,9 @@ export const useAppUpdater = () => {
 
   const checkForUpdate = useCallback(
     async (resetRemindMeLater = false) => {
+      // fork: with the updater disabled, never contact the update endpoints
+      if (AUTO_UPDATER_DISABLED) return null
+
       console.log('Checking for updates...')
 
       try {

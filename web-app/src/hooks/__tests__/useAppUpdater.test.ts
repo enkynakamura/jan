@@ -207,6 +207,21 @@ describe('useAppUpdater', () => {
       expect(result.current.updateState.remindMeLater).toBe(false)
     })
 
+    it('should not contact update endpoints when the auto updater is disabled', async () => {
+      ;(global as any).AUTO_UPDATER_DISABLED = true
+
+      const { result } = renderHook(() => useAppUpdater())
+
+      let updateResult: any
+      await act(async () => {
+        updateResult = await result.current.checkForUpdate()
+      })
+      ;(global as any).AUTO_UPDATER_DISABLED = false
+
+      expect(mockUpdaterCheck).not.toHaveBeenCalled()
+      expect(updateResult).toBe(null)
+    })
+
     it('should skip update check in dev mode', async () => {
       mockIsDev.mockReturnValue(true)
 
