@@ -980,12 +980,12 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
    * undefined so we don't send a useless system turn that some chat templates
    * still wrap into special tokens.
    */
-  protected buildSystemPrompt(messages: UIMessage[]): string | undefined {
+  protected buildSystemPrompt(): string | undefined {
     const raw =
       [
         this.systemMessage,
         this.buildMemorySystemInstruction(),
-        this.buildFilesSystemInstruction(messages),
+        this.buildFilesSystemInstruction(),
         this.buildWebSearchSystemInstruction(),
         this.buildAgentToolsSystemInstruction(),
       ]
@@ -1034,18 +1034,10 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
       let hasDocuments = this.hasDocuments
       let ragFeatureAvailable = this.ragFeatureAvailable
 
-      if (!hasDocuments && this.threadId) {
-        const thread = useThreads.getState().threads[this.threadId]
-        const hasThreadDocuments = Boolean(thread?.metadata?.hasDocuments)
-
-        const projectId = thread?.metadata?.project?.id
-        if (projectId) {
-          // fork: nei thread di progetto i tool RAG sono sempre offerti, cosi'
-          // aggiungere documenti a thread avviato non cambia il prefisso del prompt
-          hasDocuments = true
-        } else {
-          hasDocuments = hasThreadDocuments
-        }
+      if (!hasDocuments) {
+        // fork: i tool RAG sono sempre offerti in ogni thread (anche fuori dai
+        // progetti), cosi' il primo allegato non cambia il prefisso del prompt
+        hasDocuments = true
       }
 
       if (!ragFeatureAvailable) {
@@ -1427,7 +1419,7 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
     const inferenceParams = this.getActiveInferenceParams()
 
 
-    const effectiveSystem = this.buildSystemPrompt(messagesToConvert)
+    const effectiveSystem = this.buildSystemPrompt()
 
     const maxOutputTokens: number | undefined = (() => {
       const raw = inferenceParams.max_output_tokens ?? inferenceParams.max_tokens
@@ -1745,26 +1737,10 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
    * turn they belong to. Only a static, file-independent instruction is added
    * to the system prompt - it never varies per attachment, so it doesn't
    * defeat prompt caching.
+   * fork: l'istruzione e' sempre presente in ogni thread, cosi' il primo
+   * allegato non cambia il prefisso del prompt.
    */
-  buildFilesSystemInstruction(messages: UIMessage[]): string {
-    // fork: nei thread di progetto l'istruzione e' sempre presente, cosi' il
-    // primo allegato non cambia il prefisso del prompt
-    const thread = this.threadId
-      ? useThreads.getState().threads[this.threadId]
-      : undefined
-    const inProject = Boolean(thread?.metadata?.project?.id)
-    const hasAttachedFiles = inProject || messages.some(
-      (message) =>
-        message.role === 'user' &&
-        Array.isArray(message.parts) &&
-        message.parts.some(
-          (part) =>
-            part?.type === 'text' &&
-            typeof (part as { text?: string }).text === 'string' &&
-            (part as { text: string }).text.includes('[ATTACHED_FILES]')
-        )
-    )
-    if (!hasAttachedFiles) return ''
+  buildFilesSystemInstruction(): string {
     return [
       'Some user messages contain an [ATTACHED_FILES] block listing files',
       'attached to that turn (file_id, name, type, size, chunk count, mode).',
