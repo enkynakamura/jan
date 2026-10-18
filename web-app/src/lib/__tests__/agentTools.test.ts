@@ -50,12 +50,11 @@ describe('agentTools', () => {
     getJanDataFolder.mockReset().mockResolvedValue('/data')
   })
 
-  // The chat surface offers the sandboxed shell alone; everything else is
-  // Cowork's. A chat set that grew a write tool would hand the main interface
-  // an agent toolset it no longer advertises a workspace for.
-  it('restricts the chat subset to shell', async () => {
+  // fork: the chat surface offers no agent tool, not even the shell; the
+  // whole toolset is Cowork's.
+  it('offers no agent tool in chat', async () => {
     const { CHAT_AGENT_TOOL_NAMES } = await import('../agentTools')
-    expect([...CHAT_AGENT_TOOL_NAMES]).toEqual(['shell'])
+    expect([...CHAT_AGENT_TOOL_NAMES]).toEqual([])
   })
 
   // `bash` is recognised only when reading saved history; nothing dispatches

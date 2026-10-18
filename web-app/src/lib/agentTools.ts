@@ -69,7 +69,10 @@ export const isRecordedShellCall = (toolName: string): boolean =>
  * shell alone, with no network. The full toolset above is Cowork's — chat is a
  * conversation that occasionally runs a command, not an agent surface.
  */
-export const CHAT_AGENT_TOOL_NAMES = new Set(['shell'])
+// fork: la chat non offre nessun tool agente, nemmeno la shell. Upstream la
+// offre sempre (nessun toggle): confondeva il modello, che cercava i file nella
+// shell invece che nella sandbox Docker (MCP). Per riaccenderla: new Set(['shell'])
+export const CHAT_AGENT_TOOL_NAMES = new Set<string>()
 
 /**
  * Tools that only run under an enforcing OS sandbox. They stay in

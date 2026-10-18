@@ -1795,7 +1795,8 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
   }
 
   buildAgentToolsSystemInstruction(): string {
-    if (!sandboxEnforces()) return ''
+    // fork: niente sezione "# Shell" se la chat non offre la shell
+    if (!sandboxEnforces() || !CHAT_AGENT_TOOL_NAMES.has('shell')) return ''
     // Stating the limits up front is cheaper than letting the model discover
     // them by having a command refused.
     return [
