@@ -296,11 +296,17 @@ export function convertThreadMessageToUIMessage(
       // A call that failed, was denied or was stopped has no output; its error
       // is kept beside the content (see `toolErrorsOf`) so it reloads as an
       // error and not as a call that is still running.
-      const errorText = (
-        threadMessage.metadata as
-          | { toolErrors?: Record<string, string> }
-          | undefined
-      )?.toolErrors?.[content.tool_call_id ?? '']
+      // Fork: also read from the call's own `error_text`, where the fork keeps it
+      // too (extractContentPartsFromUIMessage) and where threads saved before
+      // v0.8.8 have it only.
+      const legacyErrorText = (content as { error_text?: unknown }).error_text
+      const errorText =
+        (
+          threadMessage.metadata as
+            | { toolErrors?: Record<string, string> }
+            | undefined
+        )?.toolErrors?.[content.tool_call_id ?? ''] ??
+        (typeof legacyErrorText === 'string' ? legacyErrorText : undefined)
       if (content.output != null) {
         parts.push({
           type: `tool-${content.tool_name}`,
@@ -563,6 +569,11 @@ export function extractContentPartsFromUIMessage(message: UIMessage): ThreadCont
         tool_name: toolName,
         input: input,
         output: output,
+        // Fork: a failed call has no output, only the error text the model was sent. Kept, so that a
+        // reloaded thread sends it again instead of resolveOrphanToolCalls' "Tool call did not complete".
+        ...(part.state === 'output-error' && typeof part.errorText === 'string'
+          ? { error_text: part.errorText }
+          : {}),
       }
       content.push(toolCallContent)
     }

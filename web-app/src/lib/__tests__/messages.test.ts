@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { ContentType, MessageStatus } from '@janhq/core'
 import type { UIMessage } from '@ai-sdk/react'
+import { convertToModelMessages } from 'ai'
 import {
   convertUIMessageToThreadMessage,
   convertUIMessagesToThreadMessages,
@@ -9,6 +10,11 @@ import {
   extractContentPartsFromUIMessage,
   parseReasoning,
 } from '../messages'
+import {
+  coalesceMessagesForAlternation,
+  resolveOrphanToolCalls,
+  splitAssistantToolWaves,
+} from '../custom-chat-transport'
 
 describe('parseReasoning', () => {
   it.each([
@@ -332,5 +338,56 @@ describe('extractContentPartsFromUIMessage', () => {
     const content = extractContentPartsFromUIMessage(msg)
     expect(content).toHaveLength(1)
     expect(content[0].text!.value).toBe('actual')
+  })
+})
+
+// Fork: a failed tool call kept no trace of its error once saved, so a reloaded thread showed the model
+// "Tool call did not complete (interrupted by an earlier error)" (resolveOrphanToolCalls) instead of the
+// error the tool returned.
+describe('failed tool calls keep their error text across save and reload', () => {
+  const failed = {
+    type: 'tool-search_text',
+    toolCallId: 'tc-err',
+    input: { pattern: 'x', path: 'C:\\jan-dev\\a.ts' },
+    state: 'output-error',
+    errorText: "non e' una cartella: C:\\jan-dev\\a.ts",
+  }
+  const assistant = (parts: any[]) => ({ id: 'a1', role: 'assistant', parts }) as unknown as UIMessage
+  const saved = (parts: any[]) => ({
+    id: 'a1', role: 'assistant' as const, content: extractContentPartsFromUIMessage(assistant(parts)),
+    created_at: 1, status: MessageStatus.Ready, object: 'thread.message' as const, thread_id: 't1',
+  })
+
+  it('saves the error text of a failed call', () => {
+    const [c] = extractContentPartsFromUIMessage(assistant([failed]))
+    expect(c).toMatchObject({ type: 'tool_call', tool_call_id: 'tc-err', tool_name: 'search_text', error_text: failed.errorText })
+    expect(c.output).toBeUndefined()
+  })
+
+  it('adds nothing to a call that succeeded or has no result yet', () => {
+    const [ok, pending] = extractContentPartsFromUIMessage(assistant([
+      { type: 'tool-search', toolCallId: 'tc-ok', input: {}, state: 'output-available', output: 'result' },
+      { type: 'tool-search', toolCallId: 'tc-pending', input: {}, state: 'input-available' },
+    ]))
+    expect(ok).not.toHaveProperty('error_text')
+    expect(pending).not.toHaveProperty('error_text')
+  })
+
+  it('reloads a saved failed call as output-error with its text', () => {
+    const ui = convertThreadMessageToUIMessage(saved([failed]) as any)
+    expect(ui.parts).toEqual([{
+      type: 'tool-search_text', toolCallId: 'tc-err', input: failed.input, state: 'output-error', errorText: failed.errorText,
+    }])
+  })
+
+  it('after a reload the model is sent the error the tool returned', async () => {
+    const user = { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'cerca' }] } as unknown as UIMessage
+    const reloaded = convertThreadMessageToUIMessage(saved([failed, { type: 'text', text: 'Riprovo.' }]) as any)
+    const model = await convertToModelMessages(
+      coalesceMessagesForAlternation(resolveOrphanToolCalls(splitAssistantToolWaves([user, reloaded])))
+    )
+    const results = model.filter((m) => m.role === 'tool').flatMap((m) => m.content as any[])
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ type: 'tool-result', toolCallId: 'tc-err', output: { type: 'error-text', value: failed.errorText } })
   })
 })
