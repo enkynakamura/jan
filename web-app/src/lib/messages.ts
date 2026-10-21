@@ -293,6 +293,8 @@ export function convertThreadMessageToUIMessage(
     } else if (content.type === 'tool_call') {
       // Handle tool call content items - direct conversion from flat structure
       // Use AI SDK v5 UIToolInvocation format: toolCallId, state: 'output-available'/'input-available'
+      // Fork: a call saved with error_text failed (extractContentPartsFromUIMessage): back to output-error
+      const errorText = (content as { error_text?: unknown }).error_text
       if (content.output != null) {
         parts.push({
           type: `tool-${content.tool_name}`,
@@ -300,6 +302,14 @@ export function convertThreadMessageToUIMessage(
           input: content.input,
           state: 'output-available',
           output: content.output,
+        })
+      } else if (typeof errorText === 'string') {
+        parts.push({
+          type: `tool-${content.tool_name}`,
+          toolCallId: content.tool_call_id,
+          input: content.input,
+          state: 'output-error',
+          errorText,
         })
       } else {
         parts.push({
@@ -523,6 +533,11 @@ export function extractContentPartsFromUIMessage(message: UIMessage): ThreadCont
         tool_name: toolName,
         input: input,
         output: output,
+        // Fork: a failed call has no output, only the error text the model was sent. Kept, so that a
+        // reloaded thread sends it again instead of resolveOrphanToolCalls' "Tool call did not complete".
+        ...(part.state === 'output-error' && typeof part.errorText === 'string'
+          ? { error_text: part.errorText }
+          : {}),
       }
       content.push(toolCallContent)
     }
