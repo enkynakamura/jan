@@ -83,12 +83,67 @@ pub fn create_provider(
     api_key: Option<String>,
     endpoint: Option<String>,
 ) -> Result<Box<dyn SearchProvider>, String> {
-    match provider.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        None | Some("") | Some("exa") => Ok(Box::new(ExaProvider::new(api_key)?)),
-        Some("tavily") => Ok(Box::new(TavilyProvider::new(api_key)?)),
-        Some("searxng") => Ok(Box::new(SearxngProvider::new(endpoint)?)),
-        Some("you") => Ok(Box::new(YouComProvider::new(api_key)?)),
-        Some(other) => Err(format!("Unknown web search provider '{other}'")),
+    let backend: Box<dyn SearchProvider> =
+        match provider.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+            None | Some("") | Some("exa") => Box::new(ExaProvider::new(api_key)?),
+            Some("tavily") => Box::new(TavilyProvider::new(api_key)?),
+            Some("searxng") => Box::new(SearxngProvider::new(endpoint)?),
+            Some("you") => Box::new(YouComProvider::new(api_key)?),
+            Some(other) => return Err(format!("Unknown web search provider '{other}'")),
+        };
+    // Fork: every backend refuses the blocked domains (BlockedDomains)
+    Ok(Box::new(BlockedDomains(backend)))
+}
+
+/// Fork (21/10/2026): domains that web_fetch never fetches, subdomains included, whatever the backend: no request
+/// goes to Alibaba. Its cloud (aliyuncs.com is its storage: the local model has made up links to its file proxy, with
+/// invented signatures; aliyun.com, alibabacloud.com, alicdn.com) and its shopping sites. Qwen's and ModelScope's
+/// sites (qwen.ai, qwenlm.ai, modelscope.cn, modelscope.ai) stay open: they document the models the user runs.
+const BLOCKED_FETCH_DOMAINS: &[&str] = &[
+    "aliyuncs.com",
+    "aliyun.com",
+    "alibabacloud.com",
+    "alicdn.com",
+    "alibaba.com",
+    "aliexpress.com",
+    "taobao.com",
+    "tmall.com",
+    "alipay.com",
+];
+
+/// Fork: the blocked domain that `url`'s host is or is under, if any (no case, no final dot).
+pub fn blocked_fetch_domain(url: &str) -> Option<&'static str> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed
+        .host_str()?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    BLOCKED_FETCH_DOMAINS.iter().copied().find(|domain| {
+        host == *domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|rest| rest.ends_with('.'))
+    })
+}
+
+/// Fork: a backend that refuses to fetch the blocked domains (blocked_fetch_domain) before any request is made;
+/// search is unchanged.
+struct BlockedDomains(Box<dyn SearchProvider>);
+
+#[async_trait]
+impl SearchProvider for BlockedDomains {
+    async fn search(&self, query: &str, count: u32) -> Result<Vec<SearchResult>, String> {
+        self.0.search(query, count).await
+    }
+
+    async fn fetch(&self, url: &str) -> Result<FetchedPage, String> {
+        if let Some(domain) = blocked_fetch_domain(url) {
+            log::warn!("web_fetch blocked ({domain}): {url}");
+            return Err(format!(
+                "{domain} is blocked in this Jan: the page was not fetched"
+            ));
+        }
+        self.0.fetch(url).await
     }
 }
 
@@ -998,6 +1053,60 @@ mod tests {
             Ok(_) => panic!("expected unknown provider to error"),
             Err(e) => assert!(e.contains("brave")),
         }
+    }
+
+    #[test]
+    fn blocked_fetch_domain_is_the_domain_and_its_subdomains_only() {
+        for url in [
+            "https://aliyuncs.com/x",
+            "https://routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com/proxy_temp_file/a?Expires=1&Signature=x",
+            "http://QIANWEN-RES.OSS-ACCELERATE.ALIYUNCS.COM/a.png",
+            "https://x.aliyuncs.com./a",
+            "https://user:pw@x.aliyuncs.com:8443/a",
+        ] {
+            assert_eq!(blocked_fetch_domain(url), Some("aliyuncs.com"), "{url}");
+        }
+        for (url, domain) in [
+            ("https://help.aliyun.com/zh/x", "aliyun.com"),
+            ("https://www.alibabacloud.com/help", "alibabacloud.com"),
+            ("https://img.alicdn.com/a.jpg", "alicdn.com"),
+            ("https://www.alibaba.com/", "alibaba.com"),
+            ("https://it.aliexpress.com/item/1.html", "aliexpress.com"),
+            ("https://item.taobao.com/item.htm?id=1", "taobao.com"),
+            ("https://detail.tmall.com/item.htm?id=1", "tmall.com"),
+            ("https://www.alipay.com/", "alipay.com"),
+        ] {
+            assert_eq!(blocked_fetch_domain(url), Some(domain), "{url}");
+        }
+        for url in [
+            "https://example.com/aliyuncs.com",
+            "https://notaliyuncs.com/a",
+            "https://aliyuncs.com.example.com/a",
+            "https://x.aliyuncs.com@example.com/a",
+            "https://example.com/?u=https://x.aliyuncs.com",
+            "https://qwen.ai/blog",
+            "https://qwenlm.ai/a",
+            "https://modelscope.cn/models/Qwen/x",
+            "https://www.modelscope.ai/models/x",
+            "https://huggingface.co/Qwen",
+            "not a url",
+        ] {
+            assert_eq!(blocked_fetch_domain(url), None, "{url}");
+        }
+    }
+
+    // Tavily with a made-up key: had the fetch gone out, it would have failed on the request, with another message
+    #[tokio::test]
+    async fn fetch_refuses_a_blocked_domain_before_any_request() {
+        let provider = create_provider(Some("tavily"), Some("tvly-test".into()), None).unwrap();
+        let err = provider
+            .fetch("https://x.aliyuncs.com/a.png")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "aliyuncs.com is blocked in this Jan: the page was not fetched"
+        );
     }
 
     #[test]
