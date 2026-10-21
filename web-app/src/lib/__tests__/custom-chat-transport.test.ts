@@ -16,6 +16,7 @@ import {
 } from '../custom-chat-transport'
 import { encodeToolImageSentinel } from '../tool-image-sentinel'
 import { encodeAudioSentinel } from '../audio-sentinel'
+import { imageCopyLine } from '../pastedImageCopies'
 
 const userMsg = (id: string, text: string): UIMessage =>
   ({
@@ -514,6 +515,86 @@ describe('coalesceMessagesForAlternation', () => {
       audio,
       { type: 'text', text: 'what is in it?' },
     ])
+  })
+
+  describe('fork: lines naming the files of pasted images', () => {
+    const imageA = {
+      type: 'file',
+      mediaType: 'image/png',
+      url: 'data:image/png;base64,AAA',
+    } as unknown as UIMessage['parts'][number]
+    const imageB = {
+      type: 'file',
+      mediaType: 'image/jpeg',
+      url: 'data:image/jpeg;base64,BBB',
+    } as unknown as UIMessage['parts'][number]
+    const lineA = imageCopyLine(1, '2026-10-21_101500_1.png')
+    const lineB = imageCopyLine(1, '2026-10-21_101640_1.jpg')
+
+    it("go forward with a dropped turn's images, before them, without its question", () => {
+      const input: UIMessage[] = [
+        {
+          id: 'u1',
+          role: 'user',
+          parts: [{ type: 'text', text: `che quadro è?\n\n${lineA}` }, imageA],
+        } as UIMessage,
+        assistantMsg('a1', []),
+        userMsg('u2', 'riprova'),
+      ]
+      const out = coalesceMessagesForAlternation(input)
+      expect(out).toHaveLength(1)
+      expect(out[0].parts).toEqual([
+        { type: 'text', text: lineA },
+        imageA,
+        { type: 'text', text: 'riprova' },
+      ])
+    })
+
+    it('go forward together with the attached files block', () => {
+      const docs =
+        '[ATTACHED_FILES]\n- file_id: f1, name: a.pdf\n[/ATTACHED_FILES]'
+      const input: UIMessage[] = [
+        {
+          id: 'u1',
+          role: 'user',
+          parts: [
+            { type: 'text', text: `che quadro è?\n\n${lineA}\n\n${docs}` },
+            imageA,
+          ],
+        } as UIMessage,
+        assistantMsg('a1', []),
+        userMsg('u2', 'riprova'),
+      ]
+      const out = coalesceMessagesForAlternation(input)
+      expect(out[0].parts).toEqual([
+        { type: 'text', text: `${lineA}\n\n${docs}` },
+        imageA,
+        { type: 'text', text: 'riprova' },
+      ])
+    })
+
+    it('keep each turn\'s lines just before that turn\'s images', () => {
+      const input: UIMessage[] = [
+        {
+          id: 'u1',
+          role: 'user',
+          parts: [{ type: 'text', text: `che quadro è?\n\n${lineA}` }, imageA],
+        } as UIMessage,
+        assistantMsg('a1', []),
+        {
+          id: 'u2',
+          role: 'user',
+          parts: [{ type: 'text', text: `e questo?\n\n${lineB}` }, imageB],
+        } as UIMessage,
+      ]
+      const out = coalesceMessagesForAlternation(input)
+      expect(out[0].parts).toEqual([
+        { type: 'text', text: lineA },
+        imageA,
+        { type: 'text', text: `e questo?\n\n${lineB}` },
+        imageB,
+      ])
+    })
   })
 
   it('carries a Cowork ping turn forward into the next user message', () => {

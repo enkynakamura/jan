@@ -64,12 +64,16 @@ export interface MCPService {
    * `maxOutputChars` is a per-result character budget derived from the active
    * model's context window; the backend narrows its own configured cap to it so
    * one oversized result cannot exhaust the context.
+   * Fork: `threadId` is the thread the call comes from; the backend sends it
+   * in the request's `_meta` with the code sandbox's tools only, to a server
+   * on this PC (the sandbox mounts that thread's images).
    */
   callTool(args: {
     toolName: string
     serverName?: string
     arguments: object
     maxOutputChars?: number
+    threadId?: string
   }): Promise<MCPToolCallResult>
   callToolWithCancellation(args: {
     toolName: string
@@ -77,6 +81,8 @@ export interface MCPService {
     arguments: object
     cancellationToken?: string
     maxOutputChars?: number
+    // Fork: forwarded to call_tool, which mounts the thread's images in the sandbox
+    threadId?: string
   }): ToolCallWithCancellationResult
   cancelToolCall(cancellationToken: string): Promise<void>
 

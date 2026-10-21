@@ -13,6 +13,9 @@ pub mod mcp;
 #[cfg(not(feature = "cli"))]
 pub mod navigation;
 pub mod openai_schema;
+// Fork: copies of the images sent in the chat, in the thread's folder (desktop only)
+#[cfg(not(feature = "cli"))]
+pub mod pasted_images;
 pub mod server;
 // Desktop-only app setup (tray, theme, window wiring); pulls in Tauri GUI types
 // (Wry/AppHandle) the headless `jan` CLI build does not link.

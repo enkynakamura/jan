@@ -14,6 +14,8 @@
 // verificato: va controllato sulla build release, il dev mode non lo esegue.
 
 import { generateText } from 'ai'
+import { invoke } from '@tauri-apps/api/core'
+import { toast } from 'sonner'
 import { ulid } from 'ulidx'
 import { ContentType, type ThreadMessage } from '@janhq/core'
 import { ModelFactory } from '@/lib/model-factory'
@@ -394,6 +396,32 @@ export async function compressThreadReasoning(
   const clonedMessages: ThreadMessage[] = []
 
   try {
+    // Immagini incollate (21/10/2026): i messaggi copiati le nominano come
+    // /immagini/<file>, che la sandbox cerca nella cartella del thread da cui
+    // arriva la chiamata (lib/pastedImageCopies.ts). Vanno quindi anche nella
+    // cartella del thread nuovo: collegamenti fissi (hard link), stessi file
+    // sul disco senza spazio in più, ognuno resta finché esiste un thread che
+    // lo ha. Subito, prima di copiare i messaggi: la compressione può durare
+    // minuti, e se intanto il thread originale viene eliminato, o la
+    // compressione si ferma a metà, le immagini restano nel thread nuovo. Se
+    // il collegamento fallisce la compressione prosegue, con un avviso. Se
+    // però nel frattempo è stata interrotta (Interrompi, o thread nuovo
+    // eliminato) vale l'interruzione, come in ogni altro punto del ciclo.
+    throwIfCancelled()
+    try {
+      await invoke<number>('link_thread_images', {
+        fromThreadId: thread.id,
+        toThreadId: newThread.id,
+      })
+    } catch (e) {
+      throwIfCancelled()
+      console.error('[compress] link_thread_images:', e)
+      toast.error(
+        `The images of this thread were not linked into its compressed copy: ${e instanceof Error ? e.message : String(e)}`
+      )
+    }
+    throwIfCancelled()
+
     for (const message of originalMessages) {
       // Un blocco alla volta, MAI in parallelo (niente Promise.all): chiamate
       // concorrenti allo stesso modello hanno prodotto blocchi vuoti in modo
@@ -445,7 +473,6 @@ export async function compressThreadReasoning(
       progress.doneMessages++
       onProgress?.({ ...progress })
     }
-
   } catch (error) {
     // Un abort durante generateText arriva come errore dell'SDK, non come
     // CompressionCancelled: il motivo vero e' nel segnale.

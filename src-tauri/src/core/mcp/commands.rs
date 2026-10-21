@@ -8,6 +8,7 @@ use tokio::time::timeout;
 use super::{
     constants::DEFAULT_MCP_CONFIG,
     helpers::{restart_active_mcp_servers, start_mcp_server, terminate_browser_mcp},
+    thread_meta::{is_local_server, thread_meta, wants_thread_meta},
     truncate::truncate_tool_result,
 };
 use crate::core::{
@@ -19,6 +20,7 @@ use crate::core::{
 use crate::core::{
     mcp::models::ToolWithServer,
     state::{RunningMcpService, SharedMcpServers},
+    threads::utils::get_data_dir,
 };
 use std::{collections::HashSet, fs, time::Duration};
 
@@ -393,6 +395,9 @@ pub async fn get_server_summaries(
 /// * `max_output_chars` - Optional caller-derived per-result character budget
 ///   (the desktop chat derives one from the active model's context window);
 ///   combined with the `maxToolOutputChars` setting, tighter wins
+/// * `thread_id` - Fork: the Jan thread the call comes from, sent in the request's
+///   `_meta` with the folder of Jan's threads, for the code sandbox's tools on a
+///   server on this PC only (core/mcp/thread_meta.rs)
 ///
 /// # Returns
 /// * `Result<CallToolResult, String>` - Result of the tool call if successful, or error message if failed
@@ -404,15 +409,41 @@ pub async fn get_server_summaries(
 /// 4. When found, calls the tool on that server with the provided arguments
 /// 5. Supports cancellation via cancellation_token
 /// 6. Returns error if no server has the requested tool or if specified server not found
+// Fork: the app handle and thread_id made it 8 arguments, named by the web app one by one
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
-pub async fn call_tool(
+pub async fn call_tool<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     tool_name: String,
     server_name: Option<String>,
     arguments: Option<Map<String, Value>>,
     cancellation_token: Option<String>,
     max_output_chars: Option<u64>,
+    thread_id: Option<String>,
 ) -> Result<CallToolResult, String> {
+    // Fork: `thread_id` goes only with the code sandbox's tools (core/mcp/thread_meta.rs)
+    let thread_id = thread_id.filter(|_| wants_thread_meta(&tool_name));
+    // Fork: the enabled servers that run on this PC, the only ones that get `thread_id` (with the folder of Jan's
+    // threads, see core/mcp/thread_meta.rs). Read before mcp_servers is locked below, so that the two locks are never
+    // held together.
+    let local_servers: HashSet<String> = if thread_id.is_some() {
+        state
+            .mcp_active_servers
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, config)| is_local_server(config))
+            .map(|(name, _)| name.clone())
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    let threads_dir = if thread_id.is_some() {
+        Some(get_data_dir(&get_jan_data_folder_path(app)))
+    } else {
+        None
+    };
     let (timeout_duration, tool_output_cap) = {
         let settings = state.mcp_settings.lock().await;
         (
@@ -478,6 +509,11 @@ pub async fn call_tool(
         let mut params = CallToolRequestParams::new(tool_name.clone());
         if let Some(args) = arguments.clone() {
             params = params.with_arguments(args);
+        }
+        if let (Some(id), Some(dir)) = (thread_id.as_deref(), threads_dir.as_deref()) {
+            if local_servers.contains(srv_name.as_str()) {
+                params.meta = Some(thread_meta(id, dir));
+            }
         }
         let tool_call = service.call_tool(params);
 

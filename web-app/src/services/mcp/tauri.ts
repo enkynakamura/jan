@@ -84,6 +84,7 @@ export class TauriMCPService extends DefaultMCPService {
     serverName?: string
     arguments: object
     maxOutputChars?: number
+    threadId?: string
   }): Promise<{ error: string; content: { text: string }[] }> {
     return window.core?.api?.callTool(args)
   }
@@ -94,6 +95,8 @@ export class TauriMCPService extends DefaultMCPService {
     arguments: object
     cancellationToken?: string
     maxOutputChars?: number
+    // Fork: forwarded to call_tool, which mounts the thread's images in the sandbox
+    threadId?: string
   }): {
     promise: Promise<{ error: string; content: { text: string }[] }>
     cancel: () => Promise<void>

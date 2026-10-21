@@ -14,7 +14,7 @@ import { useMessageErrors } from '@/stores/message-errors'
 import { useServiceHub } from '@/hooks/useServiceHub'
 import { useTools } from '@/hooks/useTools'
 import { useAppState } from '@/hooks/useAppState'
-import { SESSION_STORAGE_PREFIX } from '@/constants/chat'
+import { SESSION_STORAGE_PREFIX, TEMPORARY_CHAT_ID } from '@/constants/chat'
 import { useChat } from '@/hooks/use-chat'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { engineSlotsIdle } from '@janhq/tauri-plugin-llamacpp-api'
@@ -113,6 +113,8 @@ import {
   getLocalPropsExtension,
   readCtxLen,
 } from '@/lib/llamacppRouterProps'
+import { appendImageCopies } from '@/lib/pastedImageCopies'
+import { toast } from 'sonner'
 
 const CHAT_STATUS = {
   STREAMING: 'streaming',
@@ -803,6 +805,10 @@ function ThreadDetail() {
                     toolName,
                     arguments: toolCall.input,
                     maxOutputChars,
+                    // Fork: lets the code sandbox mount this thread's images (the
+                    // temporary chat has none, nor a folder)
+                    threadId:
+                      threadId === TEMPORARY_CHAT_ID ? undefined : threadId,
                   })
                   const cancel = () => void call.cancel().catch(() => {})
                   stopSignal.addEventListener('abort', cancel, { once: true })
@@ -1473,6 +1479,24 @@ function ThreadDetail() {
         }
       }
 
+      // Fork: the images this message sends are also saved as files in the
+      // thread's folder and the text names them (lib/pastedImageCopies.ts), so
+      // that the code sandbox can open them. Not in the temporary chat, which
+      // has no folder. If a copy cannot be written the user is told and the
+      // message goes without the lines: the model must not be pointed to a
+      // file that is not there. Done before the preview below is removed, so
+      // that the bubble does not disappear while the files are written.
+      let textToSend = text
+      if (threadId !== TEMPORARY_CHAT_ID) {
+        try {
+          textToSend = await appendImageCopies(text, mediaAttachments, threadId)
+        } catch (e) {
+          toast.error(
+            `Image not saved as a file: ${e instanceof Error ? e.message : String(e)}`
+          )
+        }
+      }
+
       // Remove the preview before sendMessage adds the real user message
       // with the same id — this prevents duplicates.
       if (hasDocuments) {
@@ -1482,7 +1506,7 @@ function ThreadDetail() {
       // Persist the final message to backend
       const baseUserMessage = newUserThreadContent(
         threadId,
-        text,
+        textToSend,
         processedAttachments,
         messageId
       )
@@ -1515,7 +1539,7 @@ function ThreadDetail() {
       > = [
         {
           type: 'text',
-          text: userMessage.content[0].text?.value ?? text,
+          text: userMessage.content[0].text?.value ?? textToSend,
         },
       ]
 
