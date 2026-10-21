@@ -47,6 +47,9 @@ macro_rules! invoke_commands_with_extras {
         core::filesystem::commands::mv,
         core::filesystem::commands::file_stat,
         core::filesystem::commands::write_file_sync,
+        // Fork: copies of the images sent in the chat, in the thread's folder (core/pasted_images.rs)
+        core::pasted_images::save_pasted_image,
+        core::pasted_images::link_thread_images,
         core::filesystem::commands::write_yaml,
         core::filesystem::commands::read_yaml,
         core::filesystem::commands::decompress,
@@ -383,6 +386,18 @@ pub fn run() {
                     if killed > 0 {
                         log::warn!("Reaped {killed} engine process(es) left by a previous Jan");
                     }
+                });
+            }
+
+            // Fork: thread folders that a deletion left with only pasted images (an image open at that moment, on
+            // Windows) go at start too, not only at the next deletion (core/pasted_images.rs)
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
+            {
+                let threads_dir = core::threads::utils::get_data_dir(&get_jan_data_folder_path(
+                    app.handle().clone(),
+                ));
+                tauri::async_runtime::spawn_blocking(move || {
+                    core::pasted_images::sweep_orphan_image_folders_if_needed(&threads_dir);
                 });
             }
 

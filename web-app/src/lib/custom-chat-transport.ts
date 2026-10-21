@@ -58,6 +58,7 @@ import {
   type ContextManagerConfig,
 } from './context-manager'
 import { mcpOrchestrator } from '@/lib/mcp-orchestrator'
+import { IMAGE_COPY_LINES } from '@/lib/pastedImageCopies'
 import { isRouterModelSelectable } from '@/lib/mcp-router-model-filter'
 import {
   encodeAudioSentinel,
@@ -387,7 +388,9 @@ function isAssistantMessageEmpty(message: UIMessage): boolean {
  * the model with them. By this point images are `file` parts, audio and video
  * are sentinel-only text parts, and documents are an [ATTACHED_FILES] block
  * (plus any inlined contents) appended after the question text. Cowork pings
- * are carried too.
+ * are carried too. Fork: so are the lines naming the files of the turn's images
+ * (lib/pastedImageCopies.ts), which sit between the question and that block:
+ * without them the model would see the images but not where their files are.
  */
 function carryAttachmentsForward(
   dropped: UIMessage['parts'],
@@ -409,8 +412,16 @@ function carryAttachmentsForward(
         continue
       }
       const filesAt = part.text.indexOf('[ATTACHED_FILES]')
-      if (filesAt !== -1) {
-        attachments.push({ ...part, text: part.text.slice(filesAt) })
+      const imageLines =
+        part.text
+          .slice(0, filesAt === -1 ? undefined : filesAt)
+          .match(IMAGE_COPY_LINES) ?? []
+      const carried = [
+        ...(imageLines.length > 0 ? [imageLines.join('\n')] : []),
+        ...(filesAt !== -1 ? [part.text.slice(filesAt)] : []),
+      ]
+      if (carried.length > 0) {
+        attachments.push({ ...part, text: carried.join('\n\n') })
       }
     }
   }

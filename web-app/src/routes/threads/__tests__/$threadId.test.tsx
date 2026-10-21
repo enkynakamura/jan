@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import React from 'react'
+import { toast } from 'sonner'
 
 // -----------------------------------------------------------------------------
 // Hoisted shared state + mocks (needed because vi.mock factory runs first)
@@ -136,7 +137,13 @@ const h = vi.hoisted(() => {
   const useMessageQueueMock: any = (_selector: any) => undefined
   useMessageQueueMock.getState = () => messageQueueState
 
+  // Fork: the thread the route shows, and the save of the pasted-image copies
+  const route = { threadId: 'thread-1' }
+  const mockSaveImage = vi.fn()
+
   return {
+    route,
+    mockSaveImage,
     mockSendMessage,
     mockRegenerate,
     mockStop,
@@ -177,7 +184,7 @@ const h = vi.hoisted(() => {
 
 vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => (config: any) => ({ ...config, id: '/threads/$threadId' }),
-  useParams: () => ({ threadId: 'thread-1' }),
+  useParams: () => ({ threadId: h.route.threadId }),
   useSearch: () => ({ threadModel: undefined }),
 }))
 
@@ -200,6 +207,20 @@ vi.mock('@/containers/ChatInput', () => ({
         onClick={() => onSubmit('hello world', undefined)}
       >
         send
+      </button>
+      <button
+        data-testid="chat-send-image"
+        onClick={() =>
+          onSubmit('che quadro è?', [
+            {
+              type: 'file',
+              mediaType: 'image/png',
+              url: 'data:image/png;base64,iVBORw0KGgo=',
+            },
+          ])
+        }
+      >
+        send image
       </button>
       <button data-testid="chat-stop" onClick={() => onStop()}>
         stop
@@ -402,7 +423,18 @@ vi.mock('@janhq/core', () => ({
 
 vi.mock('@/constants/chat', () => ({
   SESSION_STORAGE_PREFIX: { INITIAL_MESSAGE: 'initial-message-' },
+  TEMPORARY_CHAT_ID: 'temporary-chat',
 }))
+
+// Fork: the real helper, saving through h.mockSaveImage instead of the Rust command
+vi.mock('@/lib/pastedImageCopies', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pastedImageCopies')>()
+  return {
+    ...actual,
+    appendImageCopies: (text: string, attachments: any[], threadId: string) =>
+      actual.appendImageCopies(text, attachments, threadId, new Date(), h.mockSaveImage),
+  }
+})
 
 vi.mock('@/utils/error', () => ({
   OUT_OF_CONTEXT_SIZE: 'OUT_OF_CONTEXT_SIZE',
@@ -428,6 +460,11 @@ const renderComponent = () => {
 describe('ThreadDetail route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    h.route.threadId = 'thread-1'
+    delete h.threadsState.threads['temporary-chat']
+    h.mockSaveImage.mockReset()
+    // as the Rust command does when the name is free: the file gets the name asked for
+    h.mockSaveImage.mockImplementation(async (_threadId: string, name: string) => name)
     h.chatState.messages = []
     h.chatState.status = 'ready'
     h.chatState.error = null
@@ -522,6 +559,116 @@ describe('ThreadDetail route', () => {
       expect(h.mockSendMessage).toHaveBeenCalled()
     })
     expect(h.messagesState.addMessage).toHaveBeenCalled()
+  })
+
+  describe('pasted images saved as files (fork)', () => {
+    const LINE =
+      /^\[Immagine 1 salvata anche come file: \/immagini\/\d{4}-\d{2}-\d{2}_\d{6}_1\.png \(nella sandbox, sola lettura\)\]$/
+    const sentText = () =>
+      h.messagesState.addMessage.mock.calls[0][0].content[0].text.value as string
+
+    it('saves the image in the thread and names the file in the message', async () => {
+      renderComponent()
+      await act(async () => {
+        screen.getByTestId('chat-send-image').click()
+      })
+      await waitFor(() => {
+        expect(h.mockSendMessage).toHaveBeenCalled()
+      })
+      expect(h.mockSaveImage).toHaveBeenCalledTimes(1)
+      const [threadId, name, dataBase64] = h.mockSaveImage.mock.calls[0]
+      expect(threadId).toBe('thread-1')
+      expect(name).toMatch(/^\d{4}-\d{2}-\d{2}_\d{6}_1\.png$/)
+      expect(dataBase64).toBe('iVBORw0KGgo=')
+      const [text, line] = sentText().split('\n\n')
+      expect(text).toBe('che quadro è?')
+      expect(line).toMatch(LINE)
+      // the model gets the same text, and the image itself
+      const parts = h.mockSendMessage.mock.calls[0][0].parts
+      expect(parts[0]).toEqual({ type: 'text', text: sentText() })
+      expect(parts[1]).toEqual({
+        type: 'file',
+        mediaType: 'image/png',
+        url: 'data:image/png;base64,iVBORw0KGgo=',
+      })
+    })
+
+    it('does the same for the first message of a new thread (media from the store)', async () => {
+      h.attachmentsState.getAttachments.mockImplementation((key: string) =>
+        key === 'thread-1'
+          ? [
+              {
+                type: 'image',
+                name: 'image.png',
+                mimeType: 'image/png',
+                base64: 'iVBORw0KGgo=',
+                dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+              },
+            ]
+          : []
+      )
+      try {
+        sessionStorage.setItem(
+          'initial-message-thread-1',
+          JSON.stringify({ text: 'che quadro è?', files: [] })
+        )
+        renderComponent()
+        await waitFor(() => {
+          expect(h.mockSendMessage).toHaveBeenCalled()
+        })
+        expect(h.mockSaveImage).toHaveBeenCalledTimes(1)
+        expect(h.mockSaveImage.mock.calls[0][0]).toBe('thread-1')
+        const [text, line] = sentText().split('\n\n')
+        expect(text).toBe('che quadro è?')
+        expect(line).toMatch(LINE)
+        const parts = h.mockSendMessage.mock.calls[0][0].parts
+        expect(parts[0]).toEqual({ type: 'text', text: sentText() })
+        expect(parts[1]).toEqual({
+          type: 'file',
+          mediaType: 'image/png',
+          url: 'data:image/png;base64,iVBORw0KGgo=',
+        })
+      } finally {
+        h.attachmentsState.getAttachments.mockImplementation(() => [])
+      }
+    })
+
+    it('sends the message without the line, and says so, when the copy is not saved', async () => {
+      h.mockSaveImage.mockRejectedValue('the thread folder C:\\x does not exist')
+      const toastError = vi.spyOn(toast, 'error').mockImplementation(() => 'id')
+      try {
+        renderComponent()
+        await act(async () => {
+          screen.getByTestId('chat-send-image').click()
+        })
+        await waitFor(() => {
+          expect(h.mockSendMessage).toHaveBeenCalled()
+        })
+        expect(sentText()).toBe('che quadro è?')
+        expect(toastError).toHaveBeenCalledWith(
+          'Image not saved as a file: the thread folder C:\\x does not exist'
+        )
+      } finally {
+        toastError.mockRestore()
+      }
+    })
+
+    it('saves nothing in the temporary chat, which has no folder', async () => {
+      h.route.threadId = 'temporary-chat'
+      h.threadsState.threads['temporary-chat'] = {
+        ...h.threadsState.threads['thread-1'],
+        id: 'temporary-chat',
+      }
+      renderComponent()
+      await act(async () => {
+        screen.getByTestId('chat-send-image').click()
+      })
+      await waitFor(() => {
+        expect(h.mockSendMessage).toHaveBeenCalled()
+      })
+      expect(h.mockSaveImage).not.toHaveBeenCalled()
+      expect(sentText()).toBe('che quadro è?')
+    })
   })
 
   it('invokes stop when ChatInput calls onStop', () => {
@@ -839,6 +986,52 @@ describe('ThreadDetail route', () => {
       // 4096-token window in the harness: a fraction of it, not the whole thing.
       expect(maxOutputChars).toBeGreaterThan(0)
       expect(maxOutputChars).toBeLessThan(4096 * 3.5)
+    })
+
+    it('passes the thread id with an MCP call (fork: the sandbox mounts its images)', async () => {
+      h.appStateState.mcpToolNames = new Set(['fetch'])
+      h.toolApprovalState.requestApproval = vi.fn().mockResolvedValue(true)
+      const callTool = vi.fn().mockResolvedValue({ error: '', content: [] })
+      hub.mcp = () => ({ callTool }) as never
+      renderComponent()
+
+      const onToolCall = (
+        h as { capturedOnToolCall: (arg: unknown) => Promise<void> }
+      ).capturedOnToolCall
+      await act(async () => {
+        await onToolCall(toolCall('tc-thread'))
+      })
+      await act(async () => {
+        await finishWithToolCalls()
+      })
+
+      expect(callTool.mock.calls[0][0].threadId).toBe('thread-1')
+    })
+
+    it('passes no thread id from the temporary chat (fork: it has no folder)', async () => {
+      h.route.threadId = 'temporary-chat'
+      h.threadsState.threads['temporary-chat'] = {
+        ...h.threadsState.threads['thread-1'],
+        id: 'temporary-chat',
+      }
+      h.appStateState.mcpToolNames = new Set(['fetch'])
+      h.toolApprovalState.requestApproval = vi.fn().mockResolvedValue(true)
+      const callTool = vi.fn().mockResolvedValue({ error: '', content: [] })
+      hub.mcp = () => ({ callTool }) as never
+      renderComponent()
+
+      const onToolCall = (
+        h as { capturedOnToolCall: (arg: unknown) => Promise<void> }
+      ).capturedOnToolCall
+      await act(async () => {
+        await onToolCall(toolCall('tc-temp'))
+      })
+      await act(async () => {
+        await finishWithToolCalls()
+      })
+
+      expect(callTool).toHaveBeenCalledTimes(1)
+      expect(callTool.mock.calls[0][0].threadId).toBeUndefined()
     })
 
     it('omits the cap when the model reports no context window', async () => {

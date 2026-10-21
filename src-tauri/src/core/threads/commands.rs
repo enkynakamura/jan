@@ -127,12 +127,20 @@ pub async fn delete_thread<R: Runtime>(
         return db::db_delete_thread(app_handle, &thread_id).await;
     }
 
+    // Fork: an id that is not a bare name could point outside the thread's folder ("" is the threads folder itself)
+    if !crate::core::pasted_images::is_bare_name(&thread_id) {
+        return Err(format!("delete_thread: invalid thread id {thread_id:?}"));
+    }
+
     // Use file-based storage on desktop
     let data_folder = get_jan_data_folder_path(app_handle);
     let thread_dir = get_thread_dir(&data_folder, &thread_id);
     if thread_dir.exists() {
-        let _ = fs::remove_dir_all(thread_dir);
+        // Fork: messages.jsonl and thread.json first, failures logged, see remove_thread_dir (core/pasted_images.rs)
+        crate::core::pasted_images::remove_thread_dir(&thread_dir);
     }
+    // Fork: thread folders left with nothing but pasted images go too (core/pasted_images.rs)
+    crate::core::pasted_images::sweep_orphan_image_folders_if_needed(&get_data_dir(&data_folder));
     Ok(())
 }
 

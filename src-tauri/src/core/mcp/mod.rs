@@ -16,6 +16,9 @@ pub mod progress;
 // The server direction: Jan's own toolset offered to other agents. Tauri-free,
 // so it is built in both feature configs.
 pub mod server;
+// Fork: the calling thread's id in the `_meta` of the code sandbox's tool calls (call_tool)
+#[cfg(not(feature = "cli"))]
+pub mod thread_meta;
 pub mod truncate;
 
 #[cfg(test)]
