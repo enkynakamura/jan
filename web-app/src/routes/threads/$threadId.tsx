@@ -114,6 +114,20 @@ function isAutoAllowedTool(toolName: string): boolean {
   )
 }
 
+// Fork: the model of a thread's turn, not the one on screen. The tool loop and
+// onFinish also run for a turn that goes on while another thread is open, and
+// must size tool results, check the context and title the thread with that
+// thread's model. Its transport knows it (getTurnModelSelection); a thread
+// with no chat session yet falls back to the selection.
+function turnModelOf(threadId: string) {
+  return (
+    useChatSessions
+      .getState()
+      .sessions[threadId]?.transport.getTurnModelSelection() ??
+    useModelProvider.getState()
+  )
+}
+
 // Persist the out-of-context error onto the latest user message so the banner
 // survives thread switches, mirroring how LlamacppOomListener stamps oom/backend.
 function stampContextErrorOnThread(
@@ -180,9 +194,6 @@ function ThreadDetail() {
   const getSessionData = useChatSessions((state) => state.getSessionData)
   const sessionData = getSessionData(threadId)
 
-  // AbortController for cancelling tool calls
-  const toolCallAbortController = useRef<AbortController | null>(null)
-
   // Approval promises started in onToolCall (so the popup appears immediately)
   // and awaited by the onFinish execution loop, keyed by toolCallId. Executing
   // stays in onFinish so the tool result lands on a completed assistant message
@@ -191,18 +202,17 @@ function ThreadDetail() {
 
   const titleAbortRef = useRef<AbortController | null>(null)
 
-  // Check if we should follow up with tool calls (respects abort signal)
+  // Check if we should follow up with tool calls (respects abort signal).
+  // Fork: the signal is the thread's (sessionData), not this view's, so a tool
+  // still running when the user leaves the thread is followed up all the same.
   const followUpMessage = useCallback(
     ({ messages }: { messages: UIMessage[] }) => {
-      if (
-        !toolCallAbortController.current ||
-        toolCallAbortController.current?.signal.aborted
-      ) {
+      if (!sessionData.toolLoop || sessionData.toolLoop.signal.aborted) {
         return false
       }
       return lastAssistantMessageIsCompleteWithToolCalls({ messages })
     },
-    []
+    [sessionData]
   )
 
   // Subscribe directly to the thread data to ensure updates when model changes
@@ -317,7 +327,8 @@ function ThreadDetail() {
       // from where it stopped. The stream wrapper injects it as the first text-delta
       // of the new message, so the user sees the partial text immediately.
       if (!isAbort && finishReason === 'length') {
-        const selectedModelState = useModelProvider.getState().selectedModel
+        // Fork: the turn's model, not the one on screen (turnModelOf)
+        const selectedModelState = turnModelOf(threadId).selectedModel
         const usage = msgMeta?.usage as
           | { inputTokens?: number; outputTokens?: number }
           | undefined
@@ -479,8 +490,8 @@ function ThreadDetail() {
       // auto-resubmit (sendAutomaticallyWhen) fires. Approval is requested
       // earlier in onToolCall (popup appears without waiting for this callback);
       // we await that already-started promise here rather than prompting again.
-      toolCallAbortController.current = new AbortController()
-      const signal = toolCallAbortController.current.signal
+      sessionData.toolLoop = new AbortController()
+      const signal = sessionData.toolLoop.signal
 
       const ragToolNames = useAppState.getState().ragToolNames
       const mcpToolNames = useAppState.getState().mcpToolNames
@@ -565,7 +576,8 @@ function ThreadDetail() {
               // a page-sized one can exhaust the context on its own. Give the
               // backend a budget scaled to the window this model actually has;
               // it narrows that against the user's configured ceiling.
-              const ctxLen = useModelProvider.getState().selectedModel?.settings
+              // Fork: the turn's model, not the one on screen (turnModelOf)
+              const ctxLen = turnModelOf(threadId).selectedModel?.settings
                 ?.ctx_len?.controller_props?.value
               result = await serviceHub.mcp().callTool({
                 toolName,
@@ -617,7 +629,7 @@ function ThreadDetail() {
         useToolCallRuntime.getState().settleRemaining()
         sessionData.tools = []
         toolApprovalPromises.current.clear()
-        toolCallAbortController.current = null
+        sessionData.toolLoop = null
         useAppState.getState().setThreadBusy(threadId, false)
       })().catch((error) => {
         if (error.name !== 'AbortError') {
@@ -626,7 +638,7 @@ function ThreadDetail() {
         useToolCallRuntime.getState().settleRemaining()
         sessionData.tools = []
         toolApprovalPromises.current.clear()
-        toolCallAbortController.current = null
+        sessionData.toolLoop = null
         useAppState.getState().setThreadBusy(threadId, false)
       })
 
@@ -664,8 +676,11 @@ function ThreadDetail() {
               .join('\n\n') ||
             useThreads.getState().threads[threadId]?.title
           if (inputText) {
-            const provider = useModelProvider.getState().selectedProvider
-            const modelId = useModelProvider.getState().selectedModel?.id
+            // Fork: the thread's turn model, so the transcript never goes to
+            // the provider of another thread on screen (turnModelOf)
+            const titleModel = turnModelOf(threadId)
+            const provider = titleModel.selectedProvider
+            const modelId = titleModel.selectedModel?.id
             ;(async () => {
               if (provider === 'llamacpp' && modelId) {
                 let idle = false
@@ -686,7 +701,8 @@ function ThreadDetail() {
               titleAbortRef.current = controller
               const title = await generateThreadTitle(
                 inputText,
-                controller.signal
+                controller.signal,
+                titleModel
               )
               if (!title || controller.signal.aborted) return
               useThreads.getState().updateThread(threadId, { title })
@@ -911,17 +927,26 @@ function ThreadDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // The route component is reused across thread switches (no remount), so tear
-  // down the in-flight tool loop and release approvals waiting on the thread we
-  // are leaving. Cleanup captures the previous threadId; without this the
-  // unresolved approval promise keeps that thread marked busy forever.
+  // The route component is reused across thread switches (no remount), so
+  // release approvals waiting on the thread we are leaving. Cleanup captures the
+  // previous threadId; without this the unresolved approval promise keeps that
+  // thread marked busy forever.
   useEffect(() => {
     // Stable ref object (never reassigned) — capture for the cleanup closure.
     const approvalPromises = toolApprovalPromises.current
     return () => {
-      toolCallAbortController.current?.abort()
-      toolCallAbortController.current = null
-      approvalPromises.clear()
+      // Fork: leaving does not end the thread's turn. A tool already running
+      // goes on and its result is sent to the model, as a stream would be.
+      // Only a call still waiting for approval stops the turn, as before:
+      // clearPendingForThread below denies it, and the model must not read a
+      // refusal the user never gave.
+      const awaitingApproval = Object.values(
+        useToolApprovalRequests.getState().pending
+      ).some((entry) => entry.threadId === threadId)
+      if (awaitingApproval) {
+        sessionData.toolLoop?.abort()
+        approvalPromises.clear()
+      }
       useToolApprovalRequests.getState().clearPendingForThread(threadId)
       // Drop per-thread timing/progress/diff state from the shared runtime
       // store. The cards for the thread we leave are unmounting, so a thread a
@@ -929,6 +954,8 @@ function ThreadDetail() {
       // its own diffs on mount, so it is unaffected by clearing here.)
       useToolCallRuntime.getState().reset()
     }
+    // sessionData is one object per thread: threadId alone tracks it
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId])
 
   // Resync the OOM/backend banner from message metadata on every thread switch.

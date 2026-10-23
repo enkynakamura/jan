@@ -884,6 +884,11 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
    * clear loading/stream state that the newer request has already set.
    */
   private streamGeneration = 0
+  /**
+   * Fork: the model the current turn runs on (see turnModelSelection). The
+   * selection is global: it follows the thread on screen.
+   */
+  private turnModel: { provider: string; id: string } | null = null
 
   constructor(systemMessage?: string, threadId?: string) {
     this.systemMessage = systemMessage
@@ -894,6 +899,54 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
 
   protected getModelSelection(): { selectedProvider: string; selectedModel: Model | null } {
     return useModelProvider.getState()
+  }
+
+  /**
+   * Fork: a user message or a regenerate starts a turn on the model selected
+   * at that moment. The tool follow-ups of the turn (an assistant message
+   * last) keep it: a turn that goes on while the user looks at another thread
+   * would otherwise move to that thread's model and provider mid-turn.
+   */
+  private turnModelSelection(
+    trigger: 'submit-message' | 'regenerate-message',
+    messages: UIMessage[]
+  ): { selectedProvider: string; selectedModel: Model | null } {
+    const followUp =
+      trigger === 'submit-message' &&
+      messages[messages.length - 1]?.role === 'assistant'
+    if (!followUp || !this.turnModel) {
+      const current = this.getModelSelection()
+      this.turnModel = current.selectedModel
+        ? { provider: current.selectedProvider, id: current.selectedModel.id }
+        : null
+      return current
+    }
+    return this.getTurnModelSelection()
+  }
+
+  /**
+   * Fork: the model of this thread's current (or last) turn, resolved now: the
+   * selection itself while it is still the turn's (Cowork pins its run's model
+   * in getModelSelection, so for Cowork it always is) and before any turn. The
+   * thread page uses it too: its tool loop and onFinish also run for a turn
+   * that goes on while another thread is on screen.
+   */
+  getTurnModelSelection(): { selectedProvider: string; selectedModel: Model | null } {
+    const current = this.getModelSelection()
+    const turn = this.turnModel
+    if (
+      !turn ||
+      (current.selectedProvider === turn.provider &&
+        current.selectedModel?.id === turn.id)
+    ) {
+      return current
+    }
+    const provider = useModelProvider.getState().getProviderByName(turn.provider)
+    return {
+      selectedProvider: turn.provider,
+      selectedModel:
+        provider?.models.find((model) => model.id === turn.id) ?? null,
+    }
   }
 
   setLastUserMessage(message: string): void {
@@ -1018,7 +1071,12 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
     }
   }
 
-  async refreshTools(abortSignal?: AbortSignal) {
+  // Fork: sendMessages passes the request's model (the turn's), so whether
+  // tools are offered follows the model the request is sent to
+  async refreshTools(
+    abortSignal?: AbortSignal,
+    model: Model | null = this.getModelSelection().selectedModel
+  ) {
     // Resolve the memory digest before the prompt is built: the builder is
     // sync, so it reads the snapshot this await guarantees. Error-safe and
     // cached inside agentTools, so this is one IPC round-trip per store change.
@@ -1037,7 +1095,7 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
       return disabledToolKeys.includes(toolKey)
     }
 
-    const selectedModel = this.getModelSelection().selectedModel
+    const selectedModel = model
     const modelSupportsTools = selectedModel?.capabilities?.includes('tools') ?? this.modelSupportsTools
 
     // Only load tools if model supports them
@@ -1326,7 +1384,11 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
     // Capture the effective provider name early so the Anthropic serial
     // tool-use repair later uses the same value that was used to create the
     // model, even if the user switches provider mid-request.
-    const { selectedModel, selectedProvider: providerId } = this.getModelSelection()
+    // Fork: the turn's model, not just the one on screen (turnModelSelection)
+    const { selectedModel, selectedProvider: providerId } = this.turnModelSelection(
+      options.trigger,
+      options.messages
+    )
     const modelId = selectedModel?.id
     const effectiveProviderName = providerId
     const provider = useModelProvider.getState().getProviderByName(providerId)
@@ -1419,7 +1481,7 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
       throw engineFailure('model-errors:createModelFailed', error)
     }
 
-    await this.refreshTools(options.abortSignal)
+    await this.refreshTools(options.abortSignal, selectedModel)
 
     // Split assistant turns that place text after tool calls into separate
     // messages. Required by the Claude API (tool_use / tool_result pairing) and

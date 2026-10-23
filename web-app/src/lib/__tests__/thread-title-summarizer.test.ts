@@ -130,6 +130,20 @@ describe('generateThreadTitle', () => {
     )
   })
 
+  // Fork: a turn can end while another thread, on another model, is on
+  // screen; the caller passes the thread's own model and the title uses it
+  it('uses the model the caller passes instead of the one on screen', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Turn Title' })
+
+    await generateThreadTitle('some transcript', new AbortController().signal, {
+      selectedProvider: 'turn-provider',
+      selectedModel: { id: 'turn-model' } as Model,
+    })
+
+    expect(mockGetProviderByName).toHaveBeenCalledWith('turn-provider')
+    expect(mockCreateModel).toHaveBeenCalledWith('turn-model', mockProvider, {})
+  })
+
   // Upstream wraps an out-of-range id_slot modulo the slot count instead of
   // rejecting it, so a pin derived from the provider-level "Parallel Sequences"
   // value silently resolved to the chat slot 0 whenever the emitted count

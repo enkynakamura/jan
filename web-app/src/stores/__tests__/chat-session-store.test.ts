@@ -207,6 +207,19 @@ describe('removeSession', () => {
     clearQueueSpy.mockRestore()
   })
 
+  // Fork: the tool loop outlives the thread view, and chat.stop() does nothing
+  // while a tool runs, so deleting the thread is what stops it.
+  it('aborts the tool loop of the removed session', () => {
+    const chat = makeChat('ready')
+    useChatSessions.getState().ensureSession('s1', {} as any, () => chat as any)
+    const toolLoop = new AbortController()
+    useChatSessions.getState().sessions.s1.data.toolLoop = toolLoop
+
+    useChatSessions.getState().removeSession('s1')
+
+    expect(toolLoop.signal.aborted).toBe(true)
+  })
+
   it('clears standalone data when no session exists for the id', () => {
     useChatSessions.getState().getSessionData('orphan').tools.push({})
     useChatSessions.getState().removeSession('orphan')

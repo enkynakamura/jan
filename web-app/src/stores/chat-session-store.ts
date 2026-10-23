@@ -9,6 +9,9 @@ export type SessionData = {
   tools: any[];
   messages: UIMessage[];
   idMap: Map<string, string>;
+  // Fork: the thread's tool loop. It lives with the thread, not the view, so
+  // leaving the thread does not stop it; removeSession does.
+  toolLoop?: AbortController | null;
 };
 
 export type ChatSession = {
@@ -198,6 +201,9 @@ export const useChatSessions = create<ChatSessionState>((set, get) => ({
         console.error("Failed to unsubscribe chat session listener", error);
       }
     });
+    // Fork: stop() does nothing while a tool runs (the stream is over by then),
+    // so the tool loop is aborted here: a deleted thread's turn must not go on.
+    existing.data.toolLoop?.abort();
     try {
       existing.chat.stop();
     } catch (error) {

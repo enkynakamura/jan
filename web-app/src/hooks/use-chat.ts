@@ -31,6 +31,8 @@ export function useChat(
   options?: CustomChatOptions
 ) {
   const transportRef = useRef<CustomChatTransport | undefined>(undefined) // Using a ref here so we can update the model used in the transport without having to reload the page or recreate the transport
+  // Fork: the session the transport in transportRef was made for
+  const transportSessionRef = useRef<string | undefined>(undefined)
   const {
     sessionId,
     sessionTitle,
@@ -50,16 +52,18 @@ export function useChat(
     ? useChatSessions.getState().sessions[sessionId]?.transport
     : undefined
 
-  // Create transport immediately with modelId and provider
-  if (!transportRef.current) {
-    transportRef.current =
-      existingSessionTransport ?? new CustomChatTransport(systemMessage, sessionId)
-  } else if (
-    existingSessionTransport &&
-    transportRef.current !== existingSessionTransport
-  ) {
+  // Create transport immediately with modelId and provider.
+  // Fork: one transport per session. The route component is reused across
+  // threads, and a thread opened for the first time used to get the previous
+  // thread's transport: the two then shared system message, assistant and
+  // thread id, and a turn going on in the background was sent with the
+  // instructions of the thread on screen.
+  if (existingSessionTransport) {
     transportRef.current = existingSessionTransport
+  } else if (!transportRef.current || transportSessionRef.current !== sessionId) {
+    transportRef.current = new CustomChatTransport(systemMessage, sessionId)
   }
+  transportSessionRef.current = sessionId
 
   useEffect(() => {
     if (transportRef.current) {
