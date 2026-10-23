@@ -118,6 +118,7 @@ const h = vi.hoisted(() => {
     approveToolForThread: vi.fn(),
     clearPendingForThread: vi.fn(),
     requestApproval: vi.fn().mockResolvedValue(true),
+    pending: {},
   }
   const useToolApprovalMock: any = (selector: any) => selector(toolApprovalState)
   useToolApprovalMock.getState = () => toolApprovalState
@@ -125,7 +126,42 @@ const h = vi.hoisted(() => {
   // toolApprovalState.requestApproval / clearPendingForThread refs keep working.
   const useToolApprovalRequestsMock: any = (selector: any) =>
     selector(toolApprovalState)
-  useToolApprovalRequestsMock.getState = () => toolApprovalState
+  // Fork: as in the real store, a request is pending until it is answered.
+  // The fork reads `pending` when a thread is left (a turn waiting for
+  // approval stops, any other goes on), so a test that leaves with a request
+  // open has to see it there.
+  useToolApprovalRequestsMock.getState = () => ({
+    ...toolApprovalState,
+    requestApproval: (
+      toolCallId: string,
+      toolName: string,
+      threadId: string,
+      serverName?: string
+    ) => {
+      const answer = toolApprovalState.requestApproval(
+        toolCallId,
+        toolName,
+        threadId,
+        serverName
+      )
+      toolApprovalState.pending = {
+        ...toolApprovalState.pending,
+        [toolCallId]: {
+          ...toolApprovalState.pending[toolCallId],
+          toolCallId,
+          toolName,
+          threadId,
+        },
+      }
+      const settle = () => {
+        const rest = { ...toolApprovalState.pending }
+        delete rest[toolCallId]
+        toolApprovalState.pending = rest
+      }
+      Promise.resolve(answer).then(settle, settle)
+      return answer
+    },
+  })
 
   const agentModeState: any = { agentThreads: {} }
   const useAgentModeMock: any = (selector: any) => selector(agentModeState)
@@ -359,6 +395,10 @@ vi.mock('@/lib/messages', () => ({
   },
 }))
 
+// Fork: the transport of a session whose turn has not set a model, so
+// turnModelOf falls back to the model on screen
+const noTurnModel = { getTurnModelSelection: () => undefined }
+
 // The chat runs MCP tools through the cancellable API so Stop can end the call.
 const cancellable = (run: (args: any) => Promise<unknown>) => (args: any) => ({
   promise: run(args),
@@ -401,7 +441,9 @@ vi.mock('@/types/attachment', () => ({
 
 vi.mock('ai', () => ({
   generateId: () => 'gen-id',
-  lastAssistantMessageIsCompleteWithToolCalls: () => true,
+  // Fork: a vi.fn, so that a test can turn it off; true by default, as
+  // upstream's tests expect
+  lastAssistantMessageIsCompleteWithToolCalls: vi.fn(() => true),
 }))
 
 vi.mock('zustand/react/shallow', () => ({
@@ -518,6 +560,9 @@ import {
   resolveAutoInlineBudget,
 } from '@/lib/attachmentProcessing'
 import { usePrompt } from '@/hooks/usePrompt'
+import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
+import { deriveToolOutputCap } from '@/lib/context-manager'
+import { generateThreadTitle } from '@/lib/thread-title-summarizer'
 
 // The global setup mock is a shared object, so an overridden factory has to be
 // put back or it leaks into every later test.
@@ -566,6 +611,7 @@ describe('ThreadDetail route', () => {
     h.messagesState.deleteMessage = vi.fn()
     h.messagesState.setMessages = vi.fn()
     h.chatSessionsState.getSessionData = vi.fn(() => ({ tools: [] }))
+    h.chatSessionsState.sessions = {}
     h.messageQueueState.dequeue = vi.fn(() => null)
     h.messageQueueState.clearQueue = vi.fn()
     h.agentModeState.agentThreads = {}
@@ -575,6 +621,10 @@ describe('ThreadDetail route', () => {
     h.appStateState.mcpToolNames = new Set<string>()
     h.appStateState.tools = []
     h.toolApprovalState.requestApproval = vi.fn().mockResolvedValue(true)
+    h.toolApprovalState.pending = {}
+    h.toolApprovalState.clearPendingForThread = vi.fn()
+    h.mockAddToolOutput.mockReset()
+    vi.mocked(lastAssistantMessageIsCompleteWithToolCalls).mockReturnValue(true)
     hub.mcp = realMcp
     useToolCallRuntime.getState().reset()
     sessionStorage.clear()
@@ -1517,7 +1567,8 @@ describe('ThreadDetail route', () => {
       h.appStateState.mcpToolNames = new Set(['fetch'])
       h.toolApprovalState.requestApproval = vi.fn().mockResolvedValue(true)
       const callTool = vi.fn().mockResolvedValue({ error: '', content: [] })
-      hub.mcp = () => ({ callTool }) as never
+      hub.mcp = () =>
+        ({ callToolWithCancellation: cancellable(callTool) }) as never
       renderComponent()
 
       const onToolCall = (
@@ -1542,7 +1593,8 @@ describe('ThreadDetail route', () => {
       h.appStateState.mcpToolNames = new Set(['fetch'])
       h.toolApprovalState.requestApproval = vi.fn().mockResolvedValue(true)
       const callTool = vi.fn().mockResolvedValue({ error: '', content: [] })
-      hub.mcp = () => ({ callTool }) as never
+      hub.mcp = () =>
+        ({ callToolWithCancellation: cancellable(callTool) }) as never
       renderComponent()
 
       const onToolCall = (
@@ -2037,6 +2089,7 @@ describe('ThreadDetail route', () => {
         ])
         h.chatSessionsState.sessions = {
           'thread-1': {
+            transport: noTurnModel,
             chat: {
               messages: [
                 {
@@ -2105,6 +2158,7 @@ describe('ThreadDetail route', () => {
         ])
         h.chatSessionsState.sessions = {
           'thread-1': {
+            transport: noTurnModel,
             chat: {
               messages: [
                 {
@@ -2174,6 +2228,7 @@ describe('ThreadDetail route', () => {
         // Live: the result has just landed, and a second call is unfinished.
         h.chatSessionsState.sessions = {
           'thread-1': {
+            transport: noTurnModel,
             chat: {
               messages: [
                 { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'go' }] },
@@ -2270,6 +2325,7 @@ describe('ThreadDetail route', () => {
         ])
         h.chatSessionsState.sessions = {
           'thread-1': {
+            transport: noTurnModel,
             chat: {
               messages: [
                 {
@@ -2442,6 +2498,194 @@ describe('ThreadDetail route', () => {
 
       expect(h.appStateState.setThreadBusy).toHaveBeenCalledWith('thread-1', true)
       expect(h.appStateState.setThreadBusy).toHaveBeenLastCalledWith('thread-1', false)
+    })
+
+    // Fork: leaving the thread (another page, or another thread) aborted the
+    // view's tool loop, so the result of a tool still running was never sent
+    // back to the model and the turn stopped without a word.
+    describe('leaving the thread while a tool runs', () => {
+      // What the AI SDK asks at each tool result (addToolOutput): whether to
+      // send the conversation back to the model.
+      const followUpAtEachResult = () => {
+        const decisions: boolean[] = []
+        h.mockAddToolOutput.mockImplementation(() => {
+          decisions.push(
+            (h as any).capturedSendAutomaticallyWhen({ messages: [] })
+          )
+        })
+        return decisions
+      }
+
+      beforeEach(() => {
+        h.appStateState.mcpToolNames = new Set(['fetch'])
+        // One object per thread, as the real store gives
+        const session = { tools: [] as any[] }
+        h.chatSessionsState.getSessionData = vi.fn(() => session)
+        vi.mocked(lastAssistantMessageIsCompleteWithToolCalls).mockReturnValue(true)
+      })
+
+      it('still sends the result back to the model', async () => {
+        let finishTool: (() => void) | undefined
+        const callTool = vi.fn(
+          () =>
+            new Promise((resolve) => {
+              finishTool = () => resolve({ error: '', content: [] })
+            })
+        )
+        hub.mcp = () =>
+          ({ callToolWithCancellation: cancellable(callTool) }) as never
+        const decisions = followUpAtEachResult()
+
+        const { unmount } = renderComponent()
+        await act(async () => {
+          await (h as any).capturedOnToolCall(toolCall('tc-long'))
+        })
+        await act(async () => {
+          await finishWithToolCalls()
+        })
+        expect(callTool).toHaveBeenCalledTimes(1)
+
+        unmount()
+        await act(async () => {
+          finishTool?.()
+        })
+
+        expect(h.mockAddToolOutput).toHaveBeenCalledWith(
+          expect.objectContaining({ toolCallId: 'tc-long' })
+        )
+        expect(decisions).toEqual([true])
+      })
+
+      it('stops the turn when a call is still waiting for approval', async () => {
+        // As the real store: clearing the thread's pending approvals denies them
+        let answer: ((approved: boolean) => void) | undefined
+        h.toolApprovalState.requestApproval = vi.fn(
+          (toolCallId: string, toolName: string, threadId: string) =>
+            new Promise<boolean>((resolve) => {
+              answer = resolve
+              h.toolApprovalState.pending = {
+                [toolCallId]: { toolCallId, toolName, threadId, resolve },
+              }
+            })
+        )
+        h.toolApprovalState.clearPendingForThread = vi.fn(() => {
+          h.toolApprovalState.pending = {}
+          answer?.(false)
+        })
+        const decisions = followUpAtEachResult()
+
+        const { unmount } = renderComponent()
+        await act(async () => {
+          await (h as any).capturedOnToolCall(toolCall('tc-ask'))
+        })
+        await act(async () => {
+          await finishWithToolCalls()
+        })
+
+        unmount()
+        await act(async () => {})
+
+        expect(h.mockAddToolOutput).toHaveBeenCalledWith(
+          expect.objectContaining({ toolCallId: 'tc-ask', state: 'output-error' })
+        )
+        expect(decisions).toEqual([false])
+      })
+    })
+
+    // Fork: the tool loop and onFinish also run for a turn that goes on while
+    // another thread is open: they must use the model of that thread's turn,
+    // which its transport reports, not the model on screen.
+    describe('the turn model, not the one on screen', () => {
+      const turnModel = {
+        id: 'turn-model',
+        settings: { ctx_len: { controller_props: { value: 131072 } } },
+      }
+
+      beforeEach(() => {
+        // As a real session of the thread, empty: the page reads chat and
+        // isStreaming too (to decide whether to load the messages)
+        h.chatSessionsState.sessions = {
+          'thread-1': {
+            chat: { messages: [] },
+            isStreaming: false,
+            transport: {
+              getTurnModelSelection: () => ({
+                selectedProvider: 'turn-provider',
+                selectedModel: turnModel,
+              }),
+            },
+          },
+        }
+      })
+
+      it('sizes a tool result by the turn model', async () => {
+        h.appStateState.mcpToolNames = new Set(['fetch'])
+        const callTool = vi.fn().mockResolvedValue({ error: '', content: [] })
+        hub.mcp = () =>
+          ({ callToolWithCancellation: cancellable(callTool) }) as never
+        renderComponent()
+        await act(async () => {
+          await (h as any).capturedOnToolCall(toolCall('tc-cap'))
+        })
+        await act(async () => {
+          await finishWithToolCalls()
+        })
+
+        // The harness puts a 4096-token model on screen
+        expect(deriveToolOutputCap(131072)).not.toBe(deriveToolOutputCap(4096))
+        expect(callTool.mock.calls[0][0].maxOutputChars).toBe(
+          deriveToolOutputCap(131072)
+        )
+      })
+
+      it('titles the thread with the turn model', async () => {
+        renderComponent()
+        await act(async () => {
+          ;(h as any).capturedOnFinish({
+            message: {
+              id: 'a-title',
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'hello' }],
+              metadata: {},
+            },
+            isAbort: false,
+          })
+        })
+
+        expect(generateThreadTitle).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.any(AbortSignal),
+          expect.objectContaining({
+            selectedProvider: 'turn-provider',
+            selectedModel: turnModel,
+          })
+        )
+      })
+
+      it('checks the context against the turn model', async () => {
+        renderComponent()
+        await act(async () => {
+          ;(h as any).capturedOnFinish({
+            message: {
+              id: 'a-len',
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'partial' }],
+              metadata: {
+                finishReason: 'length',
+                usage: { inputTokens: 5000, outputTokens: 100 },
+              },
+            },
+            isAbort: false,
+          })
+        })
+
+        // 5100 tokens fill 90% of the 4096-token model on screen, not of the
+        // turn model: no context error may be stamped on the thread
+        const stamped = h.messagesState.updateMessage.mock.calls.some(
+          (c: any[]) => c[0]?.metadata?.contextError
+        )
+        expect(stamped).toBe(false)
+      })
     })
   })
 

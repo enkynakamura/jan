@@ -57,15 +57,19 @@ export function cleanTitle(raw: string): string | null {
 /**
  * Generate a summarized thread title from the user's first message.
  * Uses the currently selected model via a non-streaming generateText call.
+ * Fork: or `selection`, the model of the thread's turn, when the caller has it:
+ * a turn can end while another thread, on another model, is on screen.
  * Returns null on failure or if the signal is aborted.
  */
 export async function generateThreadTitle(
   transcript: string,
-  abortSignal: AbortSignal
+  abortSignal: AbortSignal,
+  selection?: { selectedProvider: string; selectedModel: Model | null }
 ): Promise<string | null> {
   try {
-    const { selectedModel, selectedProvider, getProviderByName } =
-      useModelProvider.getState()
+    const state = useModelProvider.getState()
+    const { selectedModel, selectedProvider } = selection ?? state
+    const { getProviderByName } = state
     if (!selectedModel || !selectedProvider) {
       console.warn('[ThreadTitle] No model/provider selected')
       return null
