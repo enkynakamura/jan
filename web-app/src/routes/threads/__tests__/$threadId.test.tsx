@@ -226,6 +226,7 @@ vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => (config: any) => ({ ...config, id: '/threads/$threadId' }),
   useParams: () => ({ threadId: h.routeParams.threadId }),
   useSearch: () => ({ threadModel: undefined }),
+  Link: ({ children }: any) => <a>{children}</a>,
 }))
 
 vi.mock('@/containers/HeaderPage', () => ({

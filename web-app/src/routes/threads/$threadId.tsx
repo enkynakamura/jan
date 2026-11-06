@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { createFileRoute, useParams, useSearch } from '@tanstack/react-router'
+import { createFileRoute, Link, useParams, useSearch } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
 
 import HeaderPage from '@/containers/HeaderPage'
 import { useThreads } from '@/hooks/useThreads'
+import { useThreadManagement } from '@/hooks/useThreadManagement'
 import ChatInput from '@/containers/ChatInput'
 import { useShallow } from 'zustand/react/shallow'
 import { MessageItem } from '@/containers/MessageItem'
@@ -2171,6 +2172,17 @@ function ThreadDetail() {
     [searchThreadModel, thread]
   )
 
+  // Fork: progetto e titolo del thread nell'intestazione, come in Claude. Il
+  // nome viene dalla lista dei progetti, perché quello copiato nei metadata
+  // del thread non cambia quando il progetto viene rinominato.
+  const { folders } = useThreadManagement()
+  const threadProject = useMemo(() => {
+    const project = thread?.metadata?.project
+    if (!project?.id) return undefined
+    return folders.find((f) => f.id === project.id) ?? project
+  }, [folders, thread?.metadata?.project])
+  const threadTitle = thread?.title || t('common:newThread')
+
   // Per-message version counts for the `< n/m >` navigation control.
   const versionInfoById = useMemo(() => {
     const map: Record<string, { index: number; count: number }> = {}
@@ -2185,8 +2197,28 @@ function ThreadDetail() {
   return (
     <div className="flex flex-col h-[calc(100dvh-(env(safe-area-inset-bottom)+env(safe-area-inset-top)))]">
       <HeaderPage>
-        <div className="flex items-center justify-between w-full pr-2">
-          <DropdownModelProvider model={threadModel} />
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 w-full pr-2">
+          <div className="min-w-max">
+            <DropdownModelProvider model={threadModel} />
+          </div>
+          <div className="flex min-w-0 items-center gap-1.5 text-sm">
+            {threadProject && (
+              <>
+                <Link
+                  to="/project/$projectId"
+                  params={{ projectId: threadProject.id }}
+                  className="max-w-[40%] truncate text-muted-foreground hover:text-foreground"
+                  title={threadProject.name}
+                >
+                  {threadProject.name}
+                </Link>
+                <span className="text-muted-foreground">/</span>
+              </>
+            )}
+            <span className="truncate font-medium" title={threadTitle}>
+              {threadTitle}
+            </span>
+          </div>
         </div>
       </HeaderPage>
       <div className="flex flex-1 flex-col h-full overflow-hidden">
