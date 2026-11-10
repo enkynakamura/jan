@@ -43,6 +43,9 @@ import {
   sandboxEnforces,
 } from '@/lib/agentTools'
 import { routeRefusedToolCalls } from '@/lib/disabledToolCalls'
+import { guardRepetition } from '@/lib/repetitionGuard'
+import { useChatSessions } from '@/stores/chat-session-store'
+import { toast } from 'sonner'
 import { useAppState, type ModelLoadProgress } from '@/hooks/useAppState'
 import { unloadLlamaModel, getLoadedModels } from '@janhq/tauri-plugin-llamacpp-api'
 import { engineFailure } from '@/lib/engineError'
@@ -1750,13 +1753,28 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
     // A call to the built-in shell while the user has it switched off is not in
     // `this.tools`, so the SDK would reject it and end the turn. Hand it to the
     // tool loop instead, which answers it with the "turned off" refusal.
-    return routeRefusedToolCalls(
+    const routedStream = routeRefusedToolCalls(
       continuedStream,
       (toolName) =>
         CHAT_AGENT_TOOL_NAMES.has(toolName) &&
         !(toolName in this.tools) &&
         !useChatShell.getState().shellEnabled
     )
+
+    // Fork: a reasoning block that starts repeating itself ends the turn the
+    // way the Stop button does (see `repetitionGuard`). The guard is the
+    // outermost wrapper, so it also measures the partial that "Continue"
+    // replays: continuing a turn stopped for a loop stops again.
+    return guardRepetition(routedStream, (stop) => {
+      toast.warning(
+        `Stopped: the model was repeating itself (repetition ${stop.r5.toFixed(2)})`
+      )
+      // In a later task, so the chunk carrying the mark is read before the
+      // stream is aborted.
+      setTimeout(() => {
+        useChatSessions.getState().sessions[threadId]?.chat.stop()
+      }, 0)
+    })
   }
 
   async reconnectToStream(
