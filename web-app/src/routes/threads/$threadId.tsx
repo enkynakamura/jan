@@ -58,6 +58,7 @@ import {
   repairDetachedAssistants,
   planContinuation,
 } from '@/lib/message-branching'
+import { linkToActivePath } from '@/lib/linkToActivePath'
 import {
   ThreadMessage,
   MessageStatus,
@@ -116,6 +117,9 @@ import {
 } from '@/lib/llamacppRouterProps'
 import { appendImageCopies } from '@/lib/pastedImageCopies'
 import { toast } from 'sonner'
+import { runVerification } from '@/lib/verifyRun'
+import { summarizeVerification } from '@/lib/verifySummary'
+import { isVerifyingThread, useVerification } from '@/stores/verification-store'
 
 const CHAT_STATUS = {
   STREAMING: 'streaming',
@@ -1032,6 +1036,9 @@ function ThreadDetail() {
   // send arrow and no way to stop a runaway command.
   const toolsBusy = useAppState((s) => !!s.busyThreads[threadId])
   const toolsRunning = toolsBusy && !processingEmbeddings
+  // A reply of the thread is being verified. The composer treats it like a
+  // turn in progress: what is typed waits in the queue, and Stop ends it.
+  const verifying = useVerification(isVerifyingThread(threadId))
 
   // Read at send or stop time without making those callbacks depend on every
   // streamed token.
@@ -1042,6 +1049,12 @@ function ThreadDetail() {
   // drops the approval prompts, and settles whatever tool call never got to
   // finish so its card stops saying "Running" (and stays settled on reload).
   const handleStop = useCallback(() => {
+    // A verification is not a turn of the conversation: Stop ends it, and
+    // there is nothing else to stop or to settle.
+    if (isVerifyingThread(threadId)(useVerification.getState())) {
+      useVerification.getState().stopThread(threadId)
+      return
+    }
     // The Stop controller outlives the thread-switch cleanup, which deletes the
     // loop controller, so it is what says which turn is still running a call.
     // One already aborted was stopped earlier; its loop is only winding down.
@@ -1079,6 +1092,8 @@ function ThreadDetail() {
   // that turn still has running is abandoned: ended like a Stop, before the new
   // turn can register its own loop over it.
   const endRunningTools = useCallback(() => {
+    // The reply being verified is the one about to be replaced.
+    useVerification.getState().stopThread(threadId)
     const running = toolStopControllers.get(threadId)
     if (running && !running.signal.aborted) handleStop()
   }, [threadId, handleStop])
@@ -1625,7 +1640,22 @@ function ThreadDetail() {
   const sendQueuedMessage = useCallback(
     async (text: string) => {
       const messageId = generateId()
-      const userMessage = newUserThreadContent(threadId, text, [], messageId)
+      // Fork: in a thread with versions the message is linked to the end of
+      // the conversation shown, and its reply to it, as for a message sent
+      // directly (processAndSendMessage). Unlinked, it is not shown once the
+      // thread is opened again, and its reply becomes one more version of the
+      // reply before it.
+      const stored = useMessages.getState().getMessages(threadId)
+      const userMessage = linkToActivePath(
+        newUserThreadContent(threadId, text, [], messageId),
+        stored,
+        (
+          useThreads.getState().threads[threadId]?.metadata as
+            | Record<string, unknown>
+            | undefined
+        )?.activeRootId as string | undefined
+      )
+      if (hasBranching(stored)) pendingAssistantParentId.current = messageId
       addMessage(userMessage)
 
       sendMessage({
@@ -1916,9 +1946,82 @@ function ThreadDetail() {
     ]
   )
 
+  // Check the last reply against the tool results of its turn. The request is
+  // the transport's own, apart from the conversation; what it finds is kept in
+  // the reply and marked in a new version beside it (runVerification). It takes
+  // minutes and this component is reused across threads, so the thread is read
+  // from the stores by id when it is needed, and the screen is rewritten
+  // through the thread's own chat rather than the one this component holds.
+  const handleVerify = useCallback(
+    async (messageId: string) => {
+      const sessionOf = () => useChatSessions.getState().sessions[threadId]
+      const transport = sessionOf()?.transport
+      if (!transport) return
+      const threadOf = () => useThreads.getState().threads[threadId]
+      const storedMessages = () =>
+        threadOf() ? useMessages.getState().getMessages(threadId) : []
+      const activeRootId = () =>
+        (threadOf()?.metadata as Record<string, unknown> | undefined)
+          ?.activeRootId as string | undefined
+      // A deleted thread loses its session: its verification ends with it.
+      const unsubscribe = useChatSessions.subscribe((state) => {
+        if (!state.sessions[threadId]) {
+          useVerification.getState().stopThread(threadId)
+        }
+      })
+      const run = await runVerification(
+        {
+          id: threadId,
+          messages: storedMessages,
+          activeRootId,
+          busy: () => {
+            const session = sessionOf()
+            return (
+              !!session?.isStreaming ||
+              (session?.data.tools.length ?? 0) > 0 ||
+              !!useAppState.getState().busyThreads[threadId]
+            )
+          },
+          ask: (prompt, options) => transport.sideRequest(prompt, options),
+          updateMessage,
+          addMessage,
+          show: () => {
+            const session = sessionOf()
+            if (!session) return
+            session.chat.messages = convertThreadMessagesToUIMessages(
+              computeActivePath(storedMessages(), activeRootId())
+            )
+          },
+          newId: generateId,
+        },
+        messageId
+      ).finally(unsubscribe)
+
+      if (!run.started) {
+        toast.info(
+          'This reply cannot be verified now: a turn is running, or it is no longer the last reply'
+        )
+        return
+      }
+      if (run.record.outcome === 'stopped') return
+      const summary = summarizeVerification(run.record)
+      const notice =
+        `Verification: ${summary.text}` +
+        (run.version === 'skipped'
+          ? '. The marks were not written: the conversation has moved on'
+          : '')
+      if (summary.tone === 'problem') toast.error(notice)
+      else if (summary.tone === 'findings') toast.warning(notice)
+      else toast.success(notice)
+    },
+    [threadId, updateMessage, addMessage]
+  )
+
   // Handle delete message
   const handleDeleteMessage = useCallback(
     (messageId: string) => {
+      // A reply that is deleted is no longer verified.
+      useVerification.getState().stop(messageId)
       deleteMessage(threadId, messageId)
       useMessageErrors.getState().clearError(messageId)
 
@@ -2070,6 +2173,7 @@ function ThreadDetail() {
   useEffect(() => {
     if (status !== 'ready' || processingQueueRef.current) return
     if (sessionData.tools.length > 0) return
+    if (verifying) return
 
     const next = useMessageQueue.getState().dequeue(threadId)
     if (!next) return
@@ -2082,7 +2186,7 @@ function ThreadDetail() {
       .finally(() => {
         processingQueueRef.current = false
       })
-  }, [status, threadId, sendQueuedMessage, sessionData.tools.length])
+  }, [status, threadId, sendQueuedMessage, sessionData.tools.length, verifying])
 
   // If streaming errors out, discard any queued messages so they don't sit there stuck
   useEffect(() => {
@@ -2260,6 +2364,7 @@ function ThreadDetail() {
                     onReasoningScrollToBottom={forceScrollReasoningToBottom}
                     onRegenerate={handleRegenerate}
                     onContinue={handleContinue}
+                    onVerify={handleVerify}
                     onEdit={handleEditMessage}
                     onDelete={handleDeleteMessage}
                     versionInfo={versionInfoById[message.id]}
@@ -2386,7 +2491,7 @@ function ThreadDetail() {
             onSubmit={handleSubmit}
             onStop={handleStop}
             chatStatus={effectiveStatus}
-            toolsRunning={toolsRunning}
+            toolsRunning={toolsRunning || verifying}
           />
         </div>
       </div>

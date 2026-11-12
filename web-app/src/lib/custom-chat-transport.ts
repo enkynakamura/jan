@@ -44,6 +44,8 @@ import {
 } from '@/lib/agentTools'
 import { routeRefusedToolCalls } from '@/lib/disabledToolCalls'
 import { guardRepetition } from '@/lib/repetitionGuard'
+import { runSideRequest, type SideRequestResult } from '@/lib/sideRequest'
+import { withoutMarksForModel, withoutMarksInText } from '@/lib/verifyMarks'
 import { useChatSessions } from '@/stores/chat-session-store'
 import { toast } from 'sonner'
 import { useAppState, type ModelLoadProgress } from '@/hooks/useAppState'
@@ -1499,7 +1501,11 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
     // messages. Required by the Claude API (tool_use / tool_result pairing) and
     // it keeps the prompt prefix byte-identical across turns so llama.cpp reuses
     // the KV cache. See `splitAssistantToolWaves`.
-    const messagesToConvert = splitAssistantToolWaves(options.messages)
+    // Fork: without the verification marks, which are for the reader. A model
+    // that reads them in its earlier replies writes them itself (verifyMarks).
+    const messagesToConvert = withoutMarksForModel(
+      splitAssistantToolWaves(options.messages)
+    )
 
     const inferenceParams = this.getActiveInferenceParams()
 
@@ -1633,7 +1639,13 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
                   ]
                 : []),
               ...(continueContent.text
-                ? [{ type: 'text' as const, text: continueContent.text }]
+                ? [
+                    {
+                      type: 'text' as const,
+                      // Fork: the marks stay on screen (verifyMarks)
+                      text: withoutMarksInText(continueContent.text),
+                    },
+                  ]
                 : []),
             ],
           },
@@ -1775,6 +1787,93 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
         useChatSessions.getState().sessions[threadId]?.chat.stop()
       }, 0)
     })
+  }
+
+  /**
+   * Fork: one request outside the conversation, with the system message, the
+   * tools and the parameters of a turn of this thread, so that the engine
+   * finds the start of the prompt in its cache. It is how a reply gets
+   * verified. Nothing is added to the chat and the state of the turn in
+   * progress is left alone. Tools are offered, because leaving them out would
+   * change the prompt, but none is run (see `runSideRequest`).
+   *
+   * The parameters are put together as in `sendMessages`, except for the
+   * output cap: the assistant's own is taken out, because parameters replace
+   * the fields of the request body (see `createCustomFetch`) and it would
+   * replace the cap asked for here.
+   */
+  async sideRequest(
+    prompt: string,
+    options: {
+      maxOutputTokens: number
+      abortSignal?: AbortSignal
+      onProgress?: (characters: number) => void
+    }
+  ): Promise<SideRequestResult & { model: { provider: string; id: string } }> {
+    const { selectedModel, selectedProvider: providerId } =
+      this.getTurnModelSelection()
+    const modelId = selectedModel?.id
+    const provider = useModelProvider.getState().getProviderByName(providerId)
+    if (!this.serviceHub || !modelId || !provider) {
+      throw new Error('ServiceHub not initialized or model/provider missing.')
+    }
+
+    const modelSamplingDefaults = extractModelSamplingDefaults(selectedModel)
+    if (providerId === 'llamacpp') {
+      const thinkingBudgetTokens = await resolveThinkingBudgetTokens(
+        selectedModel,
+        modelId
+      )
+      if (thinkingBudgetTokens !== undefined) {
+        modelSamplingDefaults.thinking_budget_tokens = thinkingBudgetTokens
+      }
+    }
+    const parameters: Record<string, unknown> = {
+      ...modelSamplingDefaults,
+      ...this.getActiveInferenceParams(),
+      ...buildLlamacppReasoningParams(
+        providerId,
+        selectedModel?.settings?.reasoning?.controller_props?.value as
+          | 'auto'
+          | 'on'
+          | 'off'
+          | undefined,
+        extractModelTemplateKwargs(selectedModel)
+      ),
+    }
+    if (isPredefinedRemoteProvider(providerId)) {
+      for (const key of Object.keys(paramsSettings)) delete parameters[key]
+    }
+    if (providerId === 'llamacpp') {
+      Object.assign(parameters, this.slotParams(this.threadId))
+    }
+    delete parameters.max_output_tokens
+    delete parameters.max_tokens
+
+    const model = await this.createModelOrAbort(
+      modelId,
+      provider,
+      parameters,
+      providerId,
+      options.abortSignal
+    )
+    await this.refreshTools(options.abortSignal, selectedModel)
+    const offerTools =
+      Object.keys(this.tools).length > 0 &&
+      (selectedModel?.capabilities?.includes('tools') ??
+        this.modelSupportsTools)
+    const result = await runSideRequest({
+      model,
+      system: this.buildSystemPrompt(),
+      tools: offerTools ? this.tools : undefined,
+      prompt,
+      maxOutputTokens: options.maxOutputTokens,
+      maxRetries: isLocalChatServer(providerId, provider.base_url) ? 0 : 2,
+      abortSignal: options.abortSignal,
+      providerOptions: buildReasoningProviderOptions(providerId, selectedModel),
+      onProgress: options.onProgress,
+    })
+    return { ...result, model: { provider: providerId, id: modelId } }
   }
 
   async reconnectToStream(

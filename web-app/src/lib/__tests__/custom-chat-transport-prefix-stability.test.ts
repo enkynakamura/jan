@@ -136,6 +136,7 @@ vi.mock('../model-factory', () => ({
 import { CustomChatTransport } from '../custom-chat-transport'
 import { CoworkChatTransport } from '../coworkTransport'
 import { ModelFactory } from '../model-factory'
+import { CONTRADICTED_MARK, UNVERIFIED_MARK } from '../verifyMarks'
 
 const user = (id: string, text: string): UIMessage =>
   ({ id, role: 'user', parts: [{ type: 'text', text }] }) as UIMessage
@@ -491,3 +492,67 @@ it.each(['anthropic', 'google', 'openai'])(
     expect(sent).not.toContain('__JAN_TOOL_IMAGE__')
   }
 )
+
+// Fork: the verification marks are for the reader of a reply. A model that
+// reads them in the history writes them itself, so none is sent. Made-up text.
+describe('CustomChatTransport verification marks', () => {
+  beforeEach(() => {
+    streamTextCalls.length = 0
+    h.disabledTools = []
+    h.servers = ['srv']
+    h.providerId = 'openai'
+    h.assistantParameters = null
+    h.getModelProps.mockReset()
+    provider.provider = 'openai'
+    provider.settings = []
+    selectedModel.id = 'gpt'
+    selectedModel.capabilities = ['tools']
+    h.getRelevantTools.mockReset()
+    h.getRelevantTools.mockResolvedValue([
+      { name: 'tool_a', description: 'a', inputSchema: {}, server: 'srv' },
+    ])
+  })
+
+  const plain = 'It opened in 1932. It is 412 metres long.'
+  const marked = `It opened in 1932. ${CONTRADICTED_MARK} It is 412 metres long. ${UNVERIFIED_MARK}`
+  // The user may write the words of a mark: they are sent.
+  const asked = `is that so? ${UNVERIFIED_MARK}`
+  const turn = (reply: string): UIMessage[] => [
+    user('u1', 'when did it open?'),
+    assistant('a1', reply),
+    user('u2', asked),
+  ]
+
+  it('sends a marked reply as it was before it was marked', async () => {
+    const transport = new CustomChatTransport('you are jan', 'thread-1')
+    await drain(await send(transport, turn(plain)))
+    await drain(await send(transport, turn(marked)))
+
+    expect(streamTextCalls).toHaveLength(2)
+    const [unmarked, withMarks] = streamTextCalls.map((call) =>
+      JSON.stringify(call.messages)
+    )
+    expect(withMarks).toBe(unmarked)
+    expect(withMarks).toContain(plain)
+    expect(withMarks).not.toContain(CONTRADICTED_MARK)
+    expect(withMarks).toContain(asked)
+  })
+
+  it('sends the text of a stopped reply to continue without the marks', async () => {
+    const transport = new CustomChatTransport('you are jan', 'thread-1')
+    transport.setContinueFromContent(
+      `It opened in 1932. ${CONTRADICTED_MARK} It is`
+    )
+    await drain(await send(transport, [user('u1', 'when did it open?')]))
+
+    const messages = streamTextCalls[0].messages as Array<{
+      role: string
+      content: unknown
+    }>
+    const last = messages[messages.length - 1]
+    expect(last.role).toBe('assistant')
+    expect(last.content).toEqual([
+      { type: 'text', text: 'It opened in 1932. It is' },
+    ])
+  })
+})

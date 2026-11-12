@@ -782,4 +782,119 @@ describe('MessageItem', () => {
     )
     expect(screen.queryByTitle('chat:actions.regenerate')).not.toBeInTheDocument()
   })
+
+  it('fires onVerify when verify button clicked (assistant, last)', () => {
+    const onVerify = vi.fn()
+    render(
+      <MessageItem
+        message={makeMsg() as any}
+        isFirstMessage
+        isLastMessage
+        status={'ready' as any}
+        onVerify={onVerify}
+      />
+    )
+    fireEvent.click(screen.getByTestId('verify-message'))
+    expect(onVerify).toHaveBeenCalledWith('msg-1')
+  })
+
+  it('does not render verify button when not last message, while streaming, or with no handler', () => {
+    const onVerify = vi.fn()
+    const { rerender } = render(
+      <MessageItem
+        message={makeMsg() as any}
+        isFirstMessage
+        isLastMessage={false}
+        status={'ready' as any}
+        onVerify={onVerify}
+      />
+    )
+    expect(screen.queryByTestId('verify-message')).not.toBeInTheDocument()
+
+    rerender(
+      <MessageItem
+        message={makeMsg() as any}
+        isFirstMessage
+        isLastMessage
+        status={'streaming' as any}
+        onVerify={onVerify}
+      />
+    )
+    expect(screen.queryByTestId('verify-message')).not.toBeInTheDocument()
+
+    rerender(
+      <MessageItem
+        message={makeMsg() as any}
+        isFirstMessage
+        isLastMessage
+        status={'ready' as any}
+      />
+    )
+    expect(screen.queryByTestId('verify-message')).not.toBeInTheDocument()
+  })
+
+  it('does not render verify button on a user message', () => {
+    render(
+      <MessageItem
+        message={makeMsg({ role: 'user' }) as any}
+        isFirstMessage
+        isLastMessage
+        status={'ready' as any}
+        onVerify={vi.fn()}
+      />
+    )
+    expect(screen.queryByTestId('verify-message')).not.toBeInTheDocument()
+  })
+
+  it('shows under a reply the last verification kept in its metadata', () => {
+    // A made-up record: nothing here comes from a real conversation.
+    const verification = (outcome: string) => ({
+      at: 1,
+      outcome,
+      seconds: 2,
+      maxOutputTokens: 8192,
+      truncated: false,
+      toolCalls: [],
+      output: '',
+      reasoning: '',
+      entries: [],
+      marks: 0,
+    })
+    render(
+      <MessageItem
+        message={
+          makeMsg({
+            metadata: {
+              createdAt: new Date(),
+              verifications: [
+                verification('stopped'),
+                verification('no-findings'),
+              ],
+            },
+          }) as any
+        }
+        isFirstMessage
+        isLastMessage={false}
+        status={'ready' as any}
+      />
+    )
+    expect(screen.getByTestId('verification')).toHaveAttribute(
+      'data-outcome',
+      'no-findings'
+    )
+  })
+
+  it('shows no verification under a reply that was never verified', () => {
+    render(
+      <MessageItem
+        message={makeMsg() as any}
+        isFirstMessage
+        isLastMessage
+        status={'ready' as any}
+        onVerify={vi.fn()}
+      />
+    )
+    expect(screen.queryByTestId('verification')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('verification-running')).not.toBeInTheDocument()
+  })
 })

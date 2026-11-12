@@ -14,6 +14,7 @@ import {
 } from './message/types'
 import { CopyButton } from './CopyButton'
 import { RememberButton } from './RememberButton'
+import { VerificationPanel, VerifyButton } from './VerificationPanel'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import { formatDate } from '@/utils/formatDate'
 import { useModelProvider } from '@/hooks/useModelProvider'
@@ -55,6 +56,10 @@ export type MessageItemProps = {
   onReasoningScrollToBottom?: () => void
   onRegenerate?: (messageId: string) => void
   onContinue?: (messageId: string) => void
+  /** Check this reply against the tool results of its turn. Offered on the
+   * last reply only: the marks go in a new version of it, which would hide
+   * whatever followed. */
+  onVerify?: (messageId: string) => void
   onEdit?: (messageId: string, newText: string) => void
   onDelete?: (messageId: string) => void
   /** Ask this question again, unchanged, dropping whatever it produced. Only
@@ -85,6 +90,7 @@ export const MessageItem = memo(
     onReasoningScrollToBottom,
     onRegenerate,
     onContinue,
+    onVerify,
     onEdit,
     onDelete,
     onRetry,
@@ -736,10 +742,18 @@ export const MessageItem = memo(
                     <IconRefresh size={16} />
                   </Button>
                 )}
+
+              {selectedModel && onVerify && !isStreaming && isLastMessage && (
+                <VerifyButton messageId={message.id} onVerify={onVerify} />
+              )}
             </div>
 
             <TokenSpeedIndicator streaming={isStreaming} metadata={metadata} />
           </div>
+        )}
+
+        {message.role === 'assistant' && (
+          <VerificationPanel message={message} />
         )}
 
         {/* Image Preview Dialog */}
