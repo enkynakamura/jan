@@ -3,9 +3,9 @@ import type { UIMessage } from '@ai-sdk/react'
 import type * as ProviderCaps from '@/lib/providerCaps'
 import type { SideRequest, SideRequestResult } from '@/lib/sideRequest'
 
-// A request outside the conversation has to start with the prompt of the
-// thread's turns: the same system message and the same tools, sent with the
-// same parameters. The scaffolding is the one of
+// A request outside the conversation is its prompt alone: the system message
+// and the tools of the thread's turns do not go with it. The parameters are
+// those of a turn. The scaffolding is the one of
 // custom-chat-transport-prefix-stability.test.ts: every streamText({...}) of a
 // turn is captured, and so is every side request.
 const streamTextCalls: Array<Record<string, unknown>> = []
@@ -211,7 +211,7 @@ describe('CustomChatTransport.sideRequest', () => {
     vi.mocked(ModelFactory.createModel).mockClear()
   })
 
-  it('sends the system message and the tools of a turn of the thread', async () => {
+  it('sends neither the system message nor the tools of a turn of the thread', async () => {
     const transport = new CustomChatTransport('you are jan', 'thread-1')
     await drain(await send(transport, [user('u1', 'hello')]))
     await transport.sideRequest('Check this turn.', { maxOutputTokens: 8192 })
@@ -221,19 +221,22 @@ describe('CustomChatTransport.sideRequest', () => {
     const turn = streamTextCalls[0]
     const side = sideRequestSent()
 
+    // The turn before it had both.
     expect(typeof turn.system).toBe('string')
-    expect(side.system).toBe(turn.system)
-    // Whatever a turn offers (web search is on by default), and tool_a in it.
-    expect(Object.keys(side.tools as object)).toContain('tool_a')
-    expect(Object.keys(side.tools as object)).toEqual(
-      Object.keys(turn.tools as object)
-    )
-    expect(side.tools).toEqual(turn.tools)
-    expect(JSON.stringify(side.tools)).toBe(JSON.stringify(turn.tools))
+    expect(Object.keys(turn.tools as object)).toContain('tool_a')
+    expect(side.system).toBeUndefined()
+    expect(side.tools).toBeUndefined()
     expect(side.maxRetries).toBe(turn.maxRetries)
   })
 
-  it('sends them again unchanged after a second turn', async () => {
+  it('does not look up the tools of the thread', async () => {
+    const transport = new CustomChatTransport('you are jan', 'thread-1')
+    await transport.sideRequest('Check this turn.', { maxOutputTokens: 8192 })
+
+    expect(h.getRelevantTools).not.toHaveBeenCalled()
+  })
+
+  it('leaves the system message and the tools of the next turn as they were', async () => {
     const transport = new CustomChatTransport('you are jan', 'thread-1')
     const turn1 = [user('u1', 'hello')]
     await drain(await send(transport, turn1))
@@ -248,9 +251,10 @@ describe('CustomChatTransport.sideRequest', () => {
 
     // The turn after the side request still starts as the one before it.
     const [before, after] = streamTextCalls
+    expect(typeof before.system).toBe('string')
     expect(after.system).toBe(before.system)
+    expect(Object.keys(before.tools as object)).toContain('tool_a')
     expect(JSON.stringify(after.tools)).toBe(JSON.stringify(before.tools))
-    expect(sideRequestSent().system).toBe(after.system)
   })
 
   it('passes the prompt, the cap, the stop signal and the progress callback', async () => {
@@ -312,16 +316,6 @@ describe('CustomChatTransport.sideRequest', () => {
       maxOutputTokens: 8192,
     })
     expect(result.model).toEqual({ provider: 'checker-provider', id: 'checker' })
-  })
-
-  it('offers no tools when the model cannot use them, as a turn does', async () => {
-    selectedModel.capabilities = []
-    const transport = new CustomChatTransport('you are jan', 'thread-1')
-    await drain(await send(transport, [user('u1', 'hello')]))
-    await transport.sideRequest('Check this turn.', { maxOutputTokens: 8192 })
-
-    expect(streamTextCalls[0].tools).toBeUndefined()
-    expect(sideRequestSent().tools).toBeUndefined()
   })
 
   it('leaves the turn in progress alone', async () => {

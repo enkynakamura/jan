@@ -1790,17 +1790,19 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
   }
 
   /**
-   * Fork: one request outside the conversation, with the system message, the
-   * tools and the parameters of a turn of this thread, so that the engine
-   * finds the start of the prompt in its cache. It is how a reply gets
-   * verified. Nothing is added to the chat and the state of the turn in
-   * progress is left alone. Tools are offered, because leaving them out would
-   * change the prompt, but none is run (see `runSideRequest`).
+   * Fork: one request outside the conversation, made of the prompt alone. It
+   * is how a reply gets verified. Nothing is added to the chat and the state
+   * of the turn in progress is left alone.
    *
-   * The parameters are put together as in `sendMessages`, except for the
-   * output cap: the assistant's own is taken out, because parameters replace
-   * the fields of the request body (see `createCustomFetch`) and it would
-   * replace the cap asked for here.
+   * The system message and the tools of the thread do not go with it. They
+   * did, so that the engine found the start of the prompt in its cache: in
+   * the trials the cache covered little more than the two of them, and a
+   * verifier that was offered the tools called one instead of answering.
+   *
+   * The parameters are those of a turn, put together as in `sendMessages`,
+   * except for the output cap: the assistant's own is taken out, because
+   * parameters replace the fields of the request body (see
+   * `createCustomFetch`) and it would replace the cap asked for here.
    */
   async sideRequest(
     prompt: string,
@@ -1860,15 +1862,10 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
       providerId,
       options.abortSignal
     )
-    await this.refreshTools(options.abortSignal, selectedModel)
-    const offerTools =
-      Object.keys(this.tools).length > 0 &&
-      (selectedModel?.capabilities?.includes('tools') ??
-        this.modelSupportsTools)
     const result = await runSideRequest({
       model,
-      system: this.buildSystemPrompt(),
-      tools: offerTools ? this.tools : undefined,
+      system: undefined,
+      tools: undefined,
       prompt,
       maxOutputTokens: options.maxOutputTokens,
       maxRetries: isLocalChatServer(providerId, provider.base_url) ? 0 : 2,

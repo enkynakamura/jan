@@ -143,7 +143,7 @@ describe('verifyReply: what the verifier is asked', () => {
       abortSignal: controller.signal,
       onProgress,
     })
-    expect(VERIFY_MAX_OUTPUT_TOKENS).toBe(32768)
+    expect(VERIFY_MAX_OUTPUT_TOKENS).toBe(8192)
   })
 
   it('does not ask when the turn has no tool result', async () => {

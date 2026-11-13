@@ -77,10 +77,11 @@ const REQUEST_AFTER_CONVERSATION = 'CONVERSATION>>>\n'
  * conversation. The first was tried on real turns before it was written here.
  * Findings depend on the wording, so a change to either has to be tried again.
  *
- * The tools of the thread are offered with the request, so that it starts
- * with the prompt the engine has already read, and the system message of a
- * thread may ask for them to be used: both wordings say not to. The sentence
- * was added after a verifier called one instead of answering.
+ * The request goes alone, without the system message and the tools of the
+ * thread (`CustomChatTransport.sideRequest`). Both wordings still say not to
+ * call a tool: the sentence was added when the tools went with the request,
+ * after a verifier called one instead of answering, and the wordings were
+ * tried without the tools with the sentence in them.
  */
 export function verifyRequest(text: string, conversation = false): string {
   return conversation

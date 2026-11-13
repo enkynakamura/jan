@@ -22,13 +22,15 @@ import { buildPacket, verifyRequest } from '@/lib/verifyTurn'
 /**
  * The output cap of the verifier. The engine closes the reasoning at about
  * three quarters of the cap, so the cap sets how long the verifier can think:
- * 32768 leaves 24576 tokens for reasoning. With 8192, which leaves 6144, a
- * verifier going through a reply of five paragraphs against the sources of a
- * conversation was closed at the fourth, twice, and answered all the same.
- * The first trials, of single turns, had found more with 8192 than with
- * 32768: one run each, with another model.
+ * 8192 leaves 6144 tokens for reasoning. A verifier going through a reply of
+ * five paragraphs against the sources of a conversation was closed before
+ * the end with 8192, and with 32768 as well: there it took more than three
+ * times as long, and both its findings were on statements the sources
+ * support (one run). A larger cap did not buy a complete check, so the cap
+ * is the smaller one, and a reasoning the engine closed is reported
+ * (`reasoningCut`).
  */
-export const VERIFY_MAX_OUTPUT_TOKENS = 32768
+export const VERIFY_MAX_OUTPUT_TOKENS = 8192
 
 /**
  * What the Strata engines write at the end of a reasoning they close because
