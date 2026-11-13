@@ -281,38 +281,117 @@ describe('readFindings: checks on each finding', () => {
     expect(reading('12')).toEqual(['quote-without-words'])
   })
 
-  it('requires the source of a contradicted statement to be in the tool results', () => {
-    expect(rejectionsOf({ ...contradicted, source: null })).toEqual([
-      'source-missing',
-    ])
-    expect(
-      rejectionsOf({ ...contradicted, source: 'Opened to traffic in 1935.' })
-    ).toEqual(['source-not-found'])
-    // In the answer, not in the tool results.
-    expect(
-      rejectionsOf({ ...contradicted, source: 'It is 412 metres long' })
-    ).toEqual(['source-not-found'])
-    expect(
-      rejectionsOf({
-        ...contradicted,
-        source: 'Opened to traffic in 1934. Total length: 412 m.',
-      })
-    ).toEqual(['source-differs-in-whitespace'])
-  })
-
-  it('requires an unsupported statement to have no source', () => {
-    expect(
-      rejectionsOf({ ...unsupported, source: 'Opened to traffic in 1934.' })
-    ).toEqual(['source-not-null'])
-    const noSource: Record<string, unknown> = { ...unsupported }
-    delete noSource.source
-    expect(rejectionsOf(noSource)).toEqual([])
-  })
-
   it('lists every reason a finding fails', () => {
     expect(
       rejectionsOf({ verdict: 'maybe', quote: '(d)', source: 'x' })
     ).toEqual(['invalid-verdict', 'quote-not-found', 'quote-without-words'])
+  })
+})
+
+// What a finding says of the sources does not decide whether it is used: the
+// statement is in the answer and the verifier disputes it. It decides whether
+// the code goes by its verdict.
+describe('readFindings: what a finding says of the sources', () => {
+  const entryOf = (finding: Record<string, unknown>) =>
+    read(JSON.stringify(finding)).entries[0]
+  const used = (sourceDoubt?: string) => ({
+    valid: true,
+    rejections: [],
+    ...(sourceDoubt ? { sourceDoubt } : {}),
+  })
+
+  it('goes by a contradicted finding whose source is in the sources', () => {
+    const entry = entryOf(contradicted)
+    expect(entry).toMatchObject(used())
+    expect(entry).not.toHaveProperty('sourceDoubt')
+  })
+
+  it('finds the source whatever its spaces and line ends', () => {
+    // The sources have a line end where the passage has a space.
+    for (const source of [
+      'Opened to traffic in 1934. Total length: 412 m.',
+      '  Opened to\ttraffic in\n1934.\nTotal   length: 412 m. ',
+    ]) {
+      const entry = entryOf({ ...contradicted, source })
+      expect(entry).toMatchObject(used())
+      expect(entry).not.toHaveProperty('sourceDoubt')
+    }
+  })
+
+  it('does not find a source that differs in anything else', () => {
+    for (const source of [
+      // The figure the finding rests on is another.
+      'Opened to traffic in 1935. Total length: 412 m.',
+      // A word is left out, a character is added, the case is another.
+      'Opened in 1934.',
+      'Opened to traffic in 1934..',
+      'opened to traffic in 1934.',
+      // Spaces inside a word, or none between two.
+      'Open ed to traffic in 1934.',
+      'Opened totraffic in 1934.',
+      // In the answer, not in the sources.
+      'It is 412 metres long',
+    ]) {
+      expect(entryOf({ ...contradicted, source })).toMatchObject(
+        used('source-not-found')
+      )
+    }
+  })
+
+  it('says when a contradicted finding has no source at all', () => {
+    const noSource: Record<string, unknown> = { ...contradicted }
+    delete noSource.source
+    for (const finding of [
+      noSource,
+      { ...contradicted, source: null },
+      { ...contradicted, source: '' },
+      { ...contradicted, source: ' \n' },
+      { ...contradicted, source: 7 },
+    ]) {
+      expect(entryOf(finding)).toMatchObject(used('source-missing'))
+    }
+  })
+
+  it('says when an unsupported finding gives a source, found or not', () => {
+    for (const source of ['Opened to traffic in 1934.', 'x', '']) {
+      expect(entryOf({ ...unsupported, source })).toMatchObject(
+        used('source-not-null')
+      )
+    }
+    const noSource: Record<string, unknown> = { ...unsupported }
+    delete noSource.source
+    for (const finding of [unsupported, noSource]) {
+      const entry = entryOf(finding)
+      expect(entry).toMatchObject(used())
+      expect(entry).not.toHaveProperty('sourceDoubt')
+    }
+  })
+
+  it('has nothing to say of the source of a finding that is not used', () => {
+    const entry = entryOf({
+      ...contradicted,
+      quote: 'not in the answer',
+      source: 'Opened to traffic in 1935.',
+    })
+    expect(entry).toMatchObject({
+      valid: false,
+      rejections: ['quote-not-found'],
+    })
+    expect(entry).not.toHaveProperty('sourceDoubt')
+  })
+
+  it('counts a finding with a doubt on its source towards the cap', () => {
+    const doubted = { ...contradicted, source: 'Opened to traffic in 1935.' }
+    const reading = read(
+      Array.from({ length: FINDINGS_CAP + 1 }, () =>
+        JSON.stringify(doubted)
+      ).join('\n')
+    )
+    expect(reading.entries.map((e) => e.rejections[0] ?? 'valid')).toEqual([
+      ...Array.from({ length: FINDINGS_CAP }, () => 'valid'),
+      'over-cap',
+    ])
+    expect(reading.entries[FINDINGS_CAP]).not.toHaveProperty('sourceDoubt')
   })
 })
 
@@ -366,6 +445,43 @@ describe('validFindings', () => {
         why: '',
       },
     ])
+  })
+})
+
+describe('validFindings: a finding with a doubt on its source', () => {
+  it('is given as unsupported, without the source', () => {
+    const reading = read(
+      [
+        { ...contradicted, source: 'Opened to traffic in 1935.' },
+        contradicted,
+        { ...contradicted, source: null },
+        { ...unsupported, source: 'Opened to traffic in 1934.' },
+      ]
+        .map((finding) => JSON.stringify(finding))
+        .join('\n')
+    )
+    const asUnsupported = (finding: { quote: string; why: string }) => ({
+      verdict: 'unsupported',
+      quote: finding.quote,
+      source: null,
+      why: finding.why,
+    })
+    expect(validFindings(reading)).toEqual([
+      asUnsupported(contradicted),
+      {
+        verdict: 'contradicted',
+        quote: contradicted.quote,
+        source: contradicted.source,
+        why: contradicted.why,
+      },
+      asUnsupported(contradicted),
+      asUnsupported(unsupported),
+    ])
+    // What the verifier wrote stays in the entry as it was.
+    expect(reading.entries[0].finding).toMatchObject({
+      verdict: 'contradicted',
+      source: 'Opened to traffic in 1935.',
+    })
   })
 })
 

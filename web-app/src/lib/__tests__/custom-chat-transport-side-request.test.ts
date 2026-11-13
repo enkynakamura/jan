@@ -299,6 +299,20 @@ describe('CustomChatTransport.sideRequest', () => {
     ).toEqual({ ...answer, model: { provider: 'openai', id: 'gpt' } })
   })
 
+  it('asks the model selected when it is made, not the one of the last turn', async () => {
+    const transport = new CustomChatTransport('you are jan', 'thread-1')
+    await drain(await send(transport, [user('u1', 'hello')]))
+    // The reply is there; the user selects another model, of another
+    // provider, to have it checked.
+    h.providerId = 'checker-provider'
+    selectedModel.id = 'checker'
+
+    const result = await transport.sideRequest('Check this turn.', {
+      maxOutputTokens: 8192,
+    })
+    expect(result.model).toEqual({ provider: 'checker-provider', id: 'checker' })
+  })
+
   it('offers no tools when the model cannot use them, as a turn does', async () => {
     selectedModel.capabilities = []
     const transport = new CustomChatTransport('you are jan', 'thread-1')

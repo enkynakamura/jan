@@ -97,6 +97,32 @@ describe('VerificationDetails', () => {
     expect(summary).not.toHaveTextContent('q8-model')
   })
 
+  it('says of a finding taken as unverified what the verifier claimed and why', () => {
+    const base = record().entries[0]
+    render(
+      <VerificationDetails
+        record={record({
+          entries: [
+            { ...base, sourceDoubt: 'source-not-found' },
+            { ...base, sourceDoubt: 'source-missing', occurrences: 0 },
+            base,
+          ],
+        })}
+      />
+    )
+    const items = screen.getAllByRole('listitem', { hidden: true })
+    // The verdict is the verifier's; the note is the code's.
+    expect(items[0]).toHaveTextContent(
+      'Contradicted by the source (taken as unverified: the source passage was not found in the sources)'
+    )
+    expect(items[0]).toHaveTextContent('Source: Opened to traffic in 1934.')
+    expect(items[0]).not.toHaveTextContent('not marked')
+    expect(items[1]).toHaveTextContent(
+      '(taken as unverified: no source passage was given) (not marked: the quote runs across two blocks of text)'
+    )
+    expect(items[2]).not.toHaveTextContent('taken as unverified')
+  })
+
   it('lists every entry: verdict, quote, source and reason', () => {
     render(<VerificationDetails record={record()} />)
     const items = screen.getAllByRole('listitem', { hidden: true })

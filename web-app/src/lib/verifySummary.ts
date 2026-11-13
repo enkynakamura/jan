@@ -2,7 +2,7 @@
  * A verification in words, for the reply it belongs to and for the notice.
  * The text is written to follow "Verification: ".
  */
-import type { FindingRejection } from '@/lib/verifyFindings'
+import type { FindingRejection, SourceDoubt } from '@/lib/verifyFindings'
 import type { VerificationRecord } from '@/lib/verifyReply'
 
 export type VerificationSummary = {
@@ -81,4 +81,11 @@ export const REJECTION_LABELS: Record<FindingRejection, string> = {
     'the source passage differs from the tool results in its spaces',
   'source-not-null': 'a source passage was given for an unsupported statement',
   'over-cap': 'past the limit of findings',
+}
+
+/** Why a finding is taken as unverified, whatever it says of the sources. */
+export const SOURCE_DOUBT_LABELS: Record<SourceDoubt, string> = {
+  'source-missing': 'no source passage was given',
+  'source-not-found': 'the source passage was not found in the sources',
+  'source-not-null': 'a source passage was given for an unsupported statement',
 }

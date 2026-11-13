@@ -7,7 +7,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { useVerification } from '@/stores/verification-store'
 import type { VerificationRecord } from '@/lib/verifyReply'
-import { REJECTION_LABELS, summarizeVerification } from '@/lib/verifySummary'
+import {
+  REJECTION_LABELS,
+  SOURCE_DOUBT_LABELS,
+  summarizeVerification,
+} from '@/lib/verifySummary'
 import { verificationsOf } from '@/lib/verifyWrite'
 
 const VERDICTS: Record<string, string> = {
@@ -33,12 +37,20 @@ function Entry({ entry }: { entry: VerificationRecord['entries'][number] }) {
       <div className="font-medium">
         {VERDICTS[asText(finding.verdict)] ?? asText(finding.verdict)}
         {entry.valid ? (
-          entry.occurrences === 0 && (
-            <span className="font-normal text-muted-foreground">
-              {' '}
-              (not marked: the quote runs across two blocks of text)
-            </span>
-          )
+          <>
+            {entry.sourceDoubt && (
+              <span className="font-normal text-muted-foreground">
+                {' '}
+                (taken as unverified: {SOURCE_DOUBT_LABELS[entry.sourceDoubt]})
+              </span>
+            )}
+            {entry.occurrences === 0 && (
+              <span className="font-normal text-muted-foreground">
+                {' '}
+                (not marked: the quote runs across two blocks of text)
+              </span>
+            )}
+          </>
         ) : (
           <span className="font-normal text-destructive">
             {' '}

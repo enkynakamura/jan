@@ -568,28 +568,58 @@ describe('verifyReply: a reply to a follow-up question', () => {
     })
   })
 
-  it('discards a source taken from the answer of the earlier turn', async () => {
+  // An answer or a request is not a source. A passage taken from one does not
+  // make the statement contradicted: it is marked as unverified.
+  const unverified = [
+    reasoning,
+    text(
+      `The Alda bridge opened in 1932.${U} It is 412 metres long. Its engineer was Marta Lindqvist.`
+    ),
+  ]
+
+  it('does not go by a source taken from the answer of the earlier turn', async () => {
     const fromFirstAnswer = {
       ...contradicted,
       source: 'It opened in 1932, the survey says.',
     }
     const result = await verifyReply(path, answering(lines(fromFirstAnswer)))
-    expect(result.record.outcome).toBe('nothing-valid')
-    expect(result.record.entries[0].rejections).toEqual(['source-not-found'])
+    expect(result.record).toMatchObject({ outcome: 'findings', marks: 1 })
+    expect(result.record.entries[0]).toMatchObject({
+      valid: true,
+      rejections: [],
+      sourceDoubt: 'source-not-found',
+      occurrences: 1,
+    })
+    expect(result.markedContent).toEqual(unverified)
   })
 
-  it('discards a source taken from a request or from the answer itself', async () => {
+  it('does not go by a source taken from a request or from the answer itself', async () => {
     const fromRequest = { ...contradicted, source: 'Read this survey.' }
     const fromAnswer = { ...contradicted, source: 'It is 412 metres long.' }
     const result = await verifyReply(
       path,
       answering(lines(fromRequest, fromAnswer))
     )
-    expect(result.record.outcome).toBe('nothing-valid')
-    expect(result.record.entries.map((entry) => entry.rejections)).toEqual([
-      ['source-not-found'],
-      ['source-not-found'],
+    expect(result.record).toMatchObject({ outcome: 'findings', marks: 1 })
+    expect(result.record.entries.map((entry) => entry.sourceDoubt)).toEqual([
+      'source-not-found',
+      'source-not-found',
     ])
+    expect(result.markedContent).toEqual(unverified)
+  })
+
+  it('goes by a source copied with other spaces and line ends', async () => {
+    const brokenLine = {
+      ...contradicted,
+      source: 'Opened to traffic in\n1934.  Total length: 412 m.',
+    }
+    const result = await verifyReply(path, answering(lines(brokenLine)))
+    expect(result.record.entries[0]).not.toHaveProperty('sourceDoubt')
+    expect(result.markedContent?.[1]).toEqual(
+      text(
+        `The Alda bridge opened in 1932.${C} It is 412 metres long. Its engineer was Marta Lindqvist.`
+      )
+    )
   })
 
   it('does not ask when no turn of the conversation has a source', async () => {

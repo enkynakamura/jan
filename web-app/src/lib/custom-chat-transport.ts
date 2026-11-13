@@ -1810,8 +1810,11 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
       onProgress?: (characters: number) => void
     }
   ): Promise<SideRequestResult & { model: { provider: string; id: string } }> {
+    // Fork: the model selected when the request is made, as for a new turn,
+    // not the one of the thread's last turn: a reply can be checked by a
+    // model other than the one that wrote it.
     const { selectedModel, selectedProvider: providerId } =
-      this.getTurnModelSelection()
+      this.getModelSelection()
     const modelId = selectedModel?.id
     const provider = useModelProvider.getState().getProviderByName(providerId)
     if (!this.serviceHub || !modelId || !provider) {

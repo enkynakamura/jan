@@ -8,13 +8,21 @@
  * list. The reader takes every JSON object it finds, wherever it starts, and
  * reports every other piece of text as an entry that is not a finding.
  *
- * A finding is used only if the code can confirm it:
+ * A finding has two parts: the statement it points at, and what it says of
+ * the sources. The first decides whether the finding is used:
  * - `verdict` is `contradicted` or `unsupported`;
  * - `quote` is in the answer character for character, and has words in it,
  *   not only a link, a `[[cite:...]]` marker or a `(m)`, `(d)`, `(e)` label;
- * - `source` is in the tool results character for character when the verdict
- *   is `contradicted`, and null when it is `unsupported`;
  * - it is among the first `FINDINGS_CAP` findings that pass the checks above.
+ *
+ * The second decides how far the code goes by it. A `contradicted` finding
+ * counts as one only if its `source` is in the sources, spaces and line ends
+ * apart: every other character has to be there, in order. Without that
+ * passage, and for an `unsupported` finding that gives one, the finding is
+ * still used, as `unsupported` (`sourceDoubt` says why): the statement is one
+ * the verifier disputes, and the code found it in the answer. A passage that
+ * only resembles the sources is not accepted: the difference may be the very
+ * detail the finding rests on.
  */
 
 /** Findings used from one verification; valid ones past it are discarded. */
@@ -39,6 +47,14 @@ export type FindingRejection =
   | 'source-not-null'
   | 'over-cap'
 
+/**
+ * Why the code does not go by what a finding says of the sources. The two
+ * `source-...` reasons that are not here are no longer given: they are in
+ * verifications made before, where they discarded the finding.
+ */
+export type SourceDoubt =
+  'source-missing' | 'source-not-found' | 'source-not-null'
+
 /** One piece of the verifier's output, in the order it was written. */
 export type FindingEntry = {
   /** The piece as written: the text of a JSON object, or any other text. */
@@ -48,6 +64,12 @@ export type FindingEntry = {
   valid: boolean
   /** Empty when `valid`. */
   rejections: FindingRejection[]
+  /**
+   * On a valid finding the code uses as `unsupported` whatever its verdict:
+   * the passage of a `contradicted` one is missing or was not found in the
+   * sources, or an `unsupported` one gives a passage.
+   */
+  sourceDoubt?: SourceDoubt
 }
 
 export type FindingsReading = {
@@ -56,7 +78,10 @@ export type FindingsReading = {
   entries: FindingEntry[]
 }
 
-/** A finding that passed every check. */
+/**
+ * A finding that is used, as the code uses it: `contradicted` only when its
+ * passage was found in the sources.
+ */
 export type ValidFinding = {
   verdict: FindingVerdict
   quote: string
@@ -172,13 +197,17 @@ function isNoFindings(text: string): boolean {
   return lines.length === 1 && lines[0] === NO_FINDINGS
 }
 
-/** The checks of one finding against the turn, cap excluded. */
-function rejectionsOf(
+/**
+ * The checks of one finding against the turn, cap excluded: why it is not
+ * used, and, if it is, why not as it says of the sources.
+ */
+function checksOf(
   finding: Record<string, unknown>,
   answer: string,
   toolResults: string
-): FindingRejection[] {
+): { rejections: FindingRejection[]; sourceDoubt?: SourceDoubt } {
   const rejections: FindingRejection[] = []
+  let sourceDoubt: SourceDoubt | undefined
   const { verdict, quote, source } = finding
   if (verdict !== 'contradicted' && verdict !== 'unsupported') {
     rejections.push('invalid-verdict')
@@ -198,19 +227,16 @@ function rejectionsOf(
     }
   }
   if (verdict === 'contradicted') {
-    if (typeof source !== 'string' || !source) {
-      rejections.push('source-missing')
-    } else if (!contains(toolResults, source)) {
-      rejections.push(
-        contains(collapseWhitespace(toolResults), collapseWhitespace(source))
-          ? 'source-differs-in-whitespace'
-          : 'source-not-found'
-      )
+    const passage = typeof source === 'string' ? collapseWhitespace(source) : ''
+    if (!passage) {
+      sourceDoubt = 'source-missing'
+    } else if (!contains(collapseWhitespace(toolResults), passage)) {
+      sourceDoubt = 'source-not-found'
     }
   } else if (verdict === 'unsupported' && source != null) {
-    rejections.push('source-not-null')
+    sourceDoubt = 'source-not-null'
   }
-  return rejections
+  return { rejections, sourceDoubt }
 }
 
 /**
@@ -233,7 +259,11 @@ export function readFindings(
       entries.push({ raw: piece.raw, valid: false, rejections: ['not-json'] })
       continue
     }
-    const rejections = rejectionsOf(piece.object, answer, toolResults)
+    const { rejections, sourceDoubt } = checksOf(
+      piece.object,
+      answer,
+      toolResults
+    )
     if (rejections.length === 0 && valid >= FINDINGS_CAP) {
       rejections.push('over-cap')
     }
@@ -243,12 +273,13 @@ export function readFindings(
       finding: piece.object,
       valid: rejections.length === 0,
       rejections,
+      ...(rejections.length === 0 && sourceDoubt ? { sourceDoubt } : {}),
     })
   }
   return { noFindings: false, entries }
 }
 
-/** The findings of a reading that passed every check, in order. */
+/** The findings of a reading that are used, in order. */
 export function validFindings(reading: FindingsReading): ValidFinding[] {
   return reading.entries
     .filter((entry) => entry.valid)
@@ -258,9 +289,11 @@ export function validFindings(reading: FindingsReading): ValidFinding[] {
         unknown
       >
       return {
-        verdict: verdict as FindingVerdict,
+        verdict: entry.sourceDoubt
+          ? 'unsupported'
+          : (verdict as FindingVerdict),
         quote: quote as string,
-        source: (source ?? null) as string | null,
+        source: entry.sourceDoubt ? null : ((source ?? null) as string | null),
         why: typeof why === 'string' ? why : '',
       }
     })

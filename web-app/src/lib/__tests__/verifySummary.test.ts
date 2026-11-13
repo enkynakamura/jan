@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import type { FindingRejection } from '../verifyFindings'
 import type { VerificationRecord } from '../verifyReply'
-import { REJECTION_LABELS, summarizeVerification } from '../verifySummary'
+import {
+  REJECTION_LABELS,
+  SOURCE_DOUBT_LABELS,
+  summarizeVerification,
+} from '../verifySummary'
 
 const record = (more: Partial<VerificationRecord>): VerificationRecord => ({
   at: 1,
@@ -142,6 +146,19 @@ describe('summarizeVerification', () => {
         record({ outcome: 'nothing-valid', entries: [prose], truncated: true })
       ).text
     ).toBe(`1 entry listed, none passed the checks${cut}`)
+  })
+})
+
+describe('SOURCE_DOUBT_LABELS', () => {
+  it('has words for every doubt, all different', () => {
+    expect(Object.keys(SOURCE_DOUBT_LABELS).sort()).toEqual([
+      'source-missing',
+      'source-not-found',
+      'source-not-null',
+    ])
+    const labels = Object.values(SOURCE_DOUBT_LABELS)
+    expect(new Set(labels).size).toBe(3)
+    expect(labels.every((label) => label.length > 5)).toBe(true)
   })
 })
 
