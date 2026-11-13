@@ -74,6 +74,40 @@ function Entry({ entry }: { entry: VerificationRecord['entries'][number] }) {
   )
 }
 
+/**
+ * What there is to see of a verification that left no entries: the tools the
+ * verifier called, with what it gave them, and what it wrote.
+ */
+function Unread({ record }: { record: VerificationRecord }) {
+  return (
+    <div
+      data-testid="verification-unread"
+      className="mt-2 space-y-2 select-text"
+    >
+      {record.toolCalls.map((name, i) => (
+        <div key={i}>
+          <span className="font-medium">Tool it called:</span> {name}
+          {record.toolInputs?.[i] && (
+            <pre className="whitespace-pre-wrap text-muted-foreground">
+              {record.toolInputs[i]}
+            </pre>
+          )}
+        </div>
+      ))}
+      <div>
+        <span className="font-medium">What it wrote:</span>
+        {record.output.trim() ? (
+          <div className="whitespace-pre-wrap text-muted-foreground">
+            {record.output}
+          </div>
+        ) : (
+          ' nothing'
+        )}
+      </div>
+    </div>
+  )
+}
+
 /** What one verification found, folded under a one-line summary. */
 export function VerificationDetails({
   record,
@@ -112,6 +146,10 @@ export function VerificationDetails({
           ))}
         </ol>
       )}
+      {record.entries.length === 0 &&
+        (record.outcome === 'tool-call' || record.outcome === 'unreadable') && (
+          <Unread record={record} />
+        )}
     </details>
   )
 }

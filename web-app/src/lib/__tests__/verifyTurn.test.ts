@@ -477,14 +477,33 @@ describe('verifyRequest', () => {
     )
   })
 
+  // The tools of the thread are offered with the request, and the rules of a
+  // thread may ask for them to be used: a verifier called one instead of
+  // answering.
+  it('says in both wordings not to call tools', () => {
+    const sentence =
+      ' Do not call any tool: your whole reply is the findings, or NO FINDINGS.\n'
+    for (const request of [verifyRequest('x'), verifyRequest('x', true)]) {
+      expect(request.split(sentence)).toHaveLength(2)
+      // With the other things not to do, before the form of the findings.
+      expect(request.indexOf(sentence)).toBeLessThan(
+        request.indexOf('Output at most 10 findings')
+      )
+      expect(request.indexOf(sentence)).toBeGreaterThan(
+        request.indexOf('Do not use what you remember')
+      )
+    }
+  })
+
   // The wording was tried on real turns: findings depend on it. A change to
-  // the text has to be tried again before this hash is updated.
-  it('is the wording that was tried', () => {
+  // the text has to be tried again before this hash is updated. The sentence
+  // about tools was added after those trials.
+  it('is the wording that was tried, with the sentence about tools', () => {
     const hash = createHash('sha256')
       .update(verifyRequest('{TURN_NO_REASONING}'), 'utf8')
       .digest('hex')
     expect(hash).toBe(
-      '79ab5db672dea0857272555da352dea1bdbc8ba89a7c78c4aca878b54c9ce388'
+      '8e322c7b1dfe68519a9d12c5ce8a8e13e33f21f1bb7ae453f50fd9ef8c81dfe6'
     )
   })
 
@@ -496,7 +515,7 @@ describe('verifyRequest', () => {
       .update(verifyRequest('{CONVERSATION_NO_REASONING}', true), 'utf8')
       .digest('hex')
     expect(hash).toBe(
-      'ed3b44de5481d8ac83da5b8d58362682d9d7232c63453854bf7a16c42339ec06'
+      '90160ed82f902cefcde5498bbda8ee0ffa8d339984711ed320b4bba581099976'
     )
   })
 })

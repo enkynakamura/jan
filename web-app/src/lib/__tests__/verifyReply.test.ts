@@ -97,6 +97,7 @@ const answering = (
     inputTokens: 900,
     outputTokens: 300,
     toolCalls: [],
+    toolInputs: [],
     servedModel: 'q8-served',
     model,
     ...more,
@@ -198,6 +199,7 @@ describe('verifyReply: findings', () => {
       inputTokens: 900,
       outputTokens: 300,
       toolCalls: [],
+      toolInputs: [],
       output,
       reasoning: 'I compared each sentence.',
       entries: [
@@ -344,12 +346,14 @@ describe('verifyReply: when it does not go as planned', () => {
       answering(lines(contradicted), {
         finishReason: 'tool-calls',
         toolCalls: ['web_fetch'],
+        toolInputs: ['{"url":"https://example.org/alda"}'],
       })
     )
     expect(result.markedContent).toBeUndefined()
     expect(result.record).toMatchObject({
       outcome: 'tool-call',
       toolCalls: ['web_fetch'],
+      toolInputs: ['{"url":"https://example.org/alda"}'],
       output: lines(contradicted),
       entries: [],
       marks: 0,

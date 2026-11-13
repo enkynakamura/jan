@@ -35,7 +35,7 @@ const REQUEST_BEFORE_TURN = [
   'Go through the answer one sentence at a time. For each statement of fact about the sources, look in the tool results for the passage that supports it. Report only statements that fall in one of two cases:',
   '- "contradicted": a passage in the tool results says something different;',
   '- "unsupported": no passage in the tool results says it.',
-  'A statement that correctly restates or translates a passage is supported, even when the wording differs: do not report it. Do not report format, style, labels, links or missing quotation marks. Do not correct the answer. Do not use what you remember about the topic: only the tool results count.',
+  'A statement that correctly restates or translates a passage is supported, even when the wording differs: do not report it. Do not report format, style, labels, links or missing quotation marks. Do not correct the answer. Do not use what you remember about the topic: only the tool results count. Do not call any tool: your whole reply is the findings, or NO FINDINGS.',
   '',
   'Output at most 10 findings, the most serious first, one JSON object per line, with these fields:',
   'n: a counter starting at 1',
@@ -56,7 +56,7 @@ const REQUEST_BEFORE_CONVERSATION = [
   'Go through the answer one sentence at a time. For each statement of fact about the sources, look in the sources for the passage that supports it. Report only statements that fall in one of two cases:',
   '- "contradicted": a passage in the sources says something different;',
   '- "unsupported": no passage in the sources says it.',
-  'A statement that correctly restates or translates a passage is supported, even when the wording differs: do not report it. Do not report format, style, labels, links or missing quotation marks. Do not correct the answer. Do not use what you remember about the topic: only the sources count.',
+  'A statement that correctly restates or translates a passage is supported, even when the wording differs: do not report it. Do not report format, style, labels, links or missing quotation marks. Do not correct the answer. Do not use what you remember about the topic: only the sources count. Do not call any tool: your whole reply is the findings, or NO FINDINGS.',
   '',
   'Output at most 10 findings, the most serious first, one JSON object per line, with these fields:',
   'n: a counter starting at 1',
@@ -76,6 +76,11 @@ const REQUEST_AFTER_CONVERSATION = 'CONVERSATION>>>\n'
  * turn (the last request and the reply to it, nothing attached), one for a
  * conversation. The first was tried on real turns before it was written here.
  * Findings depend on the wording, so a change to either has to be tried again.
+ *
+ * The tools of the thread are offered with the request, so that it starts
+ * with the prompt the engine has already read, and the system message of a
+ * thread may ask for them to be used: both wordings say not to. The sentence
+ * was added after a verifier called one instead of answering.
  */
 export function verifyRequest(text: string, conversation = false): string {
   return conversation

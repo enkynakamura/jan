@@ -34,6 +34,8 @@ export type SideRequestResult = {
   outputTokens: number | undefined
   /** The tools the model called instead of answering. */
   toolCalls: string[]
+  /** What it gave each of them, in the same order, as JSON text. */
+  toolInputs: string[]
   /**
    * The model the answer says it came from. A local engine answers with the
    * model it has loaded, whatever name the request asked for.
@@ -95,6 +97,9 @@ export async function runSideRequest(
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     toolCalls: toolCalls.map((call) => call.toolName),
+    toolInputs: toolCalls.map((call) =>
+      typeof call.input === 'string' ? call.input : JSON.stringify(call.input)
+    ),
     servedModel: response.modelId,
   }
 }

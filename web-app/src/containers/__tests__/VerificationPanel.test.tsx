@@ -170,6 +170,54 @@ describe('VerificationDetails', () => {
   })
 })
 
+// A verification that left no entries used to open on nothing.
+describe('VerificationDetails: what the verifier did instead', () => {
+  const unread = (more: Partial<VerificationRecord>) =>
+    render(
+      <VerificationDetails
+        record={record({ entries: [], marks: 0, output: '', ...more })}
+      />
+    )
+
+  it('shows the tool it called, with what it gave it, and what it wrote', () => {
+    unread({
+      outcome: 'tool-call',
+      toolCalls: ['run_python_code', 'web_fetch'],
+      toolInputs: ['{"code":"print(2 ** 0.5)"}'],
+      output: 'Let me compute it.',
+    })
+    const block = screen.getByTestId('verification-unread')
+    expect(block).toHaveTextContent('Tool it called: run_python_code')
+    expect(block).toHaveTextContent('{"code":"print(2 ** 0.5)"}')
+    // A call whose input was not kept (a record made before) is named.
+    expect(block).toHaveTextContent('Tool it called: web_fetch')
+    expect(block.querySelectorAll('pre')).toHaveLength(1)
+    expect(block).toHaveTextContent(/What it wrote:\s*Let me compute it\./)
+  })
+
+  it('says so when it wrote nothing', () => {
+    unread({ outcome: 'unreadable', output: ' \n' })
+    const block = screen.getByTestId('verification-unread')
+    expect(block).toHaveTextContent('What it wrote: nothing')
+    expect(block).not.toHaveTextContent('Tool it called')
+  })
+
+  it('is not there when the entries say it already, or nothing went wrong', () => {
+    const { unmount } = render(
+      <VerificationDetails
+        record={record({ outcome: 'unreadable', output: 'That is all.' })}
+      />
+    )
+    expect(screen.queryByTestId('verification-unread')).toBeNull()
+    unmount()
+    for (const outcome of ['no-findings', 'error', 'stopped'] as const) {
+      const view = unread({ outcome, output: 'NO FINDINGS' })
+      expect(screen.queryByTestId('verification-unread')).toBeNull()
+      view.unmount()
+    }
+  })
+})
+
 describe('VerificationPanel', () => {
   beforeEach(() => {
     useVerification.setState({ running: {}, records: {} })

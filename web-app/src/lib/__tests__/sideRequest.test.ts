@@ -108,6 +108,7 @@ describe('runSideRequest', () => {
       inputTokens: 100,
       outputTokens: 42,
       toolCalls: [],
+      toolInputs: [],
       // The answer names no model: the one that was asked.
       servedModel: 'mock-model-id',
     })
@@ -152,6 +153,8 @@ describe('runSideRequest', () => {
       reasoning: '',
       finishReason: 'tool-calls',
       toolCalls: ['web_search'],
+      // What the model wanted the tool to do is kept, to be shown.
+      toolInputs: ['{"query":"alda bridge"}'],
     })
     // One request only: no result was made up for the call and sent back.
     expect(model.doStreamCalls).toHaveLength(1)

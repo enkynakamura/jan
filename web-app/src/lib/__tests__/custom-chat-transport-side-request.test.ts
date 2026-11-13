@@ -171,6 +171,7 @@ const answer: SideRequestResult = {
   inputTokens: 900,
   outputTokens: 40,
   toolCalls: [],
+  toolInputs: [],
   servedModel: 'the-model-loaded',
 }
 /** What the transport handed to `runSideRequest` at its nth call. */

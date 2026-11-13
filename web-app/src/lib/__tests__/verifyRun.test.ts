@@ -92,6 +92,7 @@ const answerOf = (output: string): Awaited<ReturnType<AskVerifier>> => ({
   inputTokens: 900,
   outputTokens: 120,
   toolCalls: [],
+  toolInputs: [],
   servedModel: 'q2-served',
   model: { provider: 'strata', id: 'q2-model' },
 })

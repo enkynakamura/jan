@@ -63,6 +63,8 @@ export type VerificationRecord = {
   outputTokens?: number
   /** The tools the verifier called. None was run. */
   toolCalls: string[]
+  /** What it gave each of them, as JSON text. Not in the records made before. */
+  toolInputs?: string[]
   /** What the verifier wrote, and what it reasoned before. */
   output: string
   reasoning: string
@@ -166,6 +168,7 @@ export async function verifyReply(
       answer.finishReason === 'length' ||
       (answer.outputTokens ?? 0) >= VERIFY_MAX_OUTPUT_TOKENS,
     toolCalls: answer.toolCalls,
+    toolInputs: answer.toolInputs,
     output: answer.text,
     reasoning: answer.reasoning,
   }
