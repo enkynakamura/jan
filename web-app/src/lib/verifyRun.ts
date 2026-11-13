@@ -37,6 +37,8 @@ export type VerificationThread = {
   /** Whether a turn of the thread is being written or is running its tools. */
   busy: () => boolean
   ask: AskVerifier
+  /** The output cap of the verifier: the setting, as it is at the click. */
+  maxOutputTokens: number
   updateMessage: (message: ThreadMessage) => void
   addMessage: (message: ThreadMessage) => void
   /** Puts on screen the conversation as it is stored now. */
@@ -79,6 +81,7 @@ export async function runVerification(
   let verification: Awaited<ReturnType<typeof verifyReply>>
   try {
     verification = await verifyReply(path, thread.ask, {
+      maxOutputTokens: thread.maxOutputTokens,
       abortSignal: controller.signal,
       onProgress: (characters) => {
         // Text can still arrive after a stop, when the count on screen may

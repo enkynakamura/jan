@@ -51,6 +51,11 @@ vi.mock('@/containers/LanguageSwitcher', () => ({
   default: () => <div data-testid="language-switcher">Language Switcher</div>,
 }))
 
+// Fork: the settings of the verification have their own test.
+vi.mock('@/containers/VerificationSettings', () => ({
+  VerificationSettings: () => <div data-testid="verification-settings" />,
+}))
+
 vi.mock('@/containers/dialogs/ChangeDataFolderLocation', () => ({
   default: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="change-data-folder-dialog">{children}</div>
@@ -323,6 +328,15 @@ describe('General Settings Route', () => {
     expect(screen.getByTestId('header-page')).toBeInTheDocument()
     expect(screen.getByTestId('settings-menu')).toBeInTheDocument()
     expect(screen.getByText('common:settings')).toBeInTheDocument()
+  })
+
+  it('should render the settings of the verification', async () => {
+    const Component = GeneralRoute.component as React.ComponentType
+    await act(async () => {
+      render(<Component />)
+    })
+
+    expect(screen.getByTestId('verification-settings')).toBeInTheDocument()
   })
 
   it('should render app version', async () => {

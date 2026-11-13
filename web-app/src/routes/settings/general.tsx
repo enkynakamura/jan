@@ -28,6 +28,7 @@ import { SystemEvent } from '@/types/events'
 import { Input } from '@/components/ui/input'
 import { useHardware } from '@/hooks/useHardware'
 import LanguageSwitcher from '@/containers/LanguageSwitcher'
+import { VerificationSettings } from '@/containers/VerificationSettings'
 import { isRootDir } from '@/utils/path'
 const TOKEN_VALIDATION_TIMEOUT_MS = 10_000
 
@@ -402,6 +403,9 @@ function General() {
                 }
               />
             </Card>
+
+            {/* Fork: the settings of the verification of a reply */}
+            <VerificationSettings />
 
             {/* Other */}
             <Card title={t('common:others')}>

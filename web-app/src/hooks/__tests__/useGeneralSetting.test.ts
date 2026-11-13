@@ -72,6 +72,25 @@ describe('useGeneralSetting', () => {
     expect(typeof result.current.setHuggingfaceToken).toBe('function')
   })
 
+  // Fork: the output cap of the verifier of a reply.
+  describe('setVerifyMaxOutputTokens', () => {
+    it('should start from the cap of a verification that is given none', () => {
+      const { result } = renderHook(() => useGeneralSetting())
+
+      expect(result.current.verifyMaxOutputTokens).toBe(8192)
+    })
+
+    it('should set the cap of the verifier', () => {
+      const { result } = renderHook(() => useGeneralSetting())
+
+      act(() => {
+        result.current.setVerifyMaxOutputTokens(16384)
+      })
+
+      expect(result.current.verifyMaxOutputTokens).toBe(16384)
+    })
+  })
+
   describe('setCurrentLanguage', () => {
     it('should set language to English', () => {
       const { result } = renderHook(() => useGeneralSetting())

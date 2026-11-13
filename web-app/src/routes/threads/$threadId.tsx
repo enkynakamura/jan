@@ -15,6 +15,7 @@ import { useMessageErrors } from '@/stores/message-errors'
 import { useServiceHub } from '@/hooks/useServiceHub'
 import { useTools } from '@/hooks/useTools'
 import { useAppState } from '@/hooks/useAppState'
+import { useGeneralSetting } from '@/hooks/useGeneralSetting'
 import { SESSION_STORAGE_PREFIX, TEMPORARY_CHAT_ID } from '@/constants/chat'
 import { useChat } from '@/hooks/use-chat'
 import { useModelProvider } from '@/hooks/useModelProvider'
@@ -1983,6 +1984,8 @@ function ThreadDetail() {
             )
           },
           ask: (prompt, options) => transport.sideRequest(prompt, options),
+          // The setting as it is at the click.
+          maxOutputTokens: useGeneralSetting.getState().verifyMaxOutputTokens,
           updateMessage,
           addMessage,
           show: () => {

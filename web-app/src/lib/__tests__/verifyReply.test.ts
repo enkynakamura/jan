@@ -437,6 +437,25 @@ describe('verifyReply: when it does not go as planned', () => {
     expect(unknown.record.truncated).toBe(false)
   })
 
+  it('asks with the cap it is given, records it and measures the cut against it', async () => {
+    const ask = answering(lines(contradicted), { outputTokens: 16383 })
+    const result = await verifyReply([request, reply], ask, {
+      maxOutputTokens: 16384,
+    })
+
+    expect(ask.mock.calls[0][1].maxOutputTokens).toBe(16384)
+    expect(result.record.maxOutputTokens).toBe(16384)
+    // More than the cap of a verification that is given none, less than this.
+    expect(result.record.truncated).toBe(false)
+
+    const atTheCap = await verifyReply(
+      [request, reply],
+      answering(lines(contradicted), { outputTokens: 16384 }),
+      { maxOutputTokens: 16384 }
+    )
+    expect(atTheCap.record.truncated).toBe(true)
+  })
+
   it('says so when the output has neither findings nor NO FINDINGS', async () => {
     const prose = await verifyReply(
       [request, reply],

@@ -29,6 +29,10 @@ import { buildPacket, verifyRequest } from '@/lib/verifyTurn'
  * support (one run). A larger cap did not buy a complete check, so the cap
  * is the smaller one, and a reasoning the engine closed is reported
  * (`reasoningCut`).
+ *
+ * This is the cap of a verification that is given none. The one in use is a
+ * setting (`verifyMaxOutputTokens`, in the general settings): how much room
+ * is worth giving depends on how fast the model that verifies is.
  */
 export const VERIFY_MAX_OUTPUT_TOKENS = 8192
 
@@ -125,12 +129,15 @@ export async function verifyReply(
   path: ThreadMessage[],
   ask: AskVerifier,
   options: {
+    /** The output cap of the verifier. `VERIFY_MAX_OUTPUT_TOKENS` if left out. */
+    maxOutputTokens?: number
     abortSignal?: AbortSignal
     onProgress?: (characters: number) => void
     now?: () => number
   } = {}
 ): Promise<Verification> {
   const now = options.now ?? Date.now
+  const maxOutputTokens = options.maxOutputTokens ?? VERIFY_MAX_OUTPUT_TOKENS
   const at = now()
   const record = (
     outcome: VerificationOutcome,
@@ -139,7 +146,7 @@ export async function verifyReply(
     at,
     outcome,
     seconds: (now() - at) / 1000,
-    maxOutputTokens: VERIFY_MAX_OUTPUT_TOKENS,
+    maxOutputTokens,
     truncated: false,
     toolCalls: [],
     output: '',
@@ -159,7 +166,7 @@ export async function verifyReply(
   let answer: Awaited<ReturnType<AskVerifier>>
   try {
     answer = await ask(verifyRequest(packet.text, packet.conversation), {
-      maxOutputTokens: VERIFY_MAX_OUTPUT_TOKENS,
+      maxOutputTokens,
       abortSignal: options.abortSignal,
       onProgress: options.onProgress,
     })
@@ -185,7 +192,7 @@ export async function verifyReply(
     // Either sign: an engine can report `stop` for an answer it cut.
     truncated:
       answer.finishReason === 'length' ||
-      (answer.outputTokens ?? 0) >= VERIFY_MAX_OUTPUT_TOKENS,
+      (answer.outputTokens ?? 0) >= maxOutputTokens,
     toolCalls: answer.toolCalls,
     toolInputs: answer.toolInputs,
     output: answer.text,

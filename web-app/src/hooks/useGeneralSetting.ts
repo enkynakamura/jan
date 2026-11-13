@@ -4,6 +4,7 @@ import { localStorageKey } from '@/constants/localStorage'
 import { backendStorage } from '@/lib/backendStorage'
 import { getServiceHub } from '@/hooks/useServiceHub'
 import { ExtensionManager } from '@/lib/extension'
+import { VERIFY_MAX_OUTPUT_TOKENS } from '@/lib/verifyReply'
 
 export const HUGGINGFACE_TOKEN_SECRET_KEY = 'huggingface'
 type GeneralSettingState = {
@@ -12,12 +13,15 @@ type GeneralSettingState = {
   tokenCounterCompact: boolean
   autoUpdateCheck: boolean
   stripReasoningFromContext: boolean
+  // Fork: the output cap of the verifier of a reply (see verifyReply).
+  verifyMaxOutputTokens: number
   huggingfaceToken?: string
   setHuggingfaceToken: (token: string) => void
   setSpellCheckChatInput: (value: boolean) => void
   setTokenCounterCompact: (value: boolean) => void
   setAutoUpdateCheck: (value: boolean) => void
   setStripReasoningFromContext: (value: boolean) => void
+  setVerifyMaxOutputTokens: (value: number) => void
   setCurrentLanguage: (value: Language) => void
 }
 
@@ -29,12 +33,15 @@ export const useGeneralSetting = create<GeneralSettingState>()(
       tokenCounterCompact: true,
       autoUpdateCheck: true,
       stripReasoningFromContext: false,
+      verifyMaxOutputTokens: VERIFY_MAX_OUTPUT_TOKENS,
       huggingfaceToken: undefined,
       setSpellCheckChatInput: (value) => set({ spellCheckChatInput: value }),
       setTokenCounterCompact: (value) => set({ tokenCounterCompact: value }),
       setAutoUpdateCheck: (value) => set({ autoUpdateCheck: value }),
       setStripReasoningFromContext: (value) =>
         set({ stripReasoningFromContext: value }),
+      setVerifyMaxOutputTokens: (value) =>
+        set({ verifyMaxOutputTokens: value }),
       setCurrentLanguage: (value) => set({ currentLanguage: value }),
       setHuggingfaceToken: (token) => {
         set({ huggingfaceToken: token })
@@ -80,6 +87,7 @@ export const useGeneralSetting = create<GeneralSettingState>()(
         tokenCounterCompact: state.tokenCounterCompact,
         autoUpdateCheck: state.autoUpdateCheck,
         stripReasoningFromContext: state.stripReasoningFromContext,
+        verifyMaxOutputTokens: state.verifyMaxOutputTokens,
       }),
     }
   )

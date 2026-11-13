@@ -114,6 +114,7 @@ function threadOf(initial: ThreadMessage[], ask: AskVerifier) {
     activeRootId: () => undefined,
     busy: () => state.busy,
     ask,
+    maxOutputTokens: 16384,
     updateMessage: (next) => {
       state.updated.push(next.id)
       state.stored = state.stored.map((m) => (m.id === next.id ? next : m))
@@ -298,6 +299,19 @@ describe('runVerification', () => {
     expect(state.shown).toEqual([['m1', 'm2', 'm3', 'n1']])
     // Each message is written once, with all that changes in it.
     expect(state.updated).toEqual(['m1', 'm2', 'm3', 'm4'])
+  })
+
+  it('asks with the cap of the thread, and records it', async () => {
+    const caps: number[] = []
+    const { thread } = threadOf(withSource(), async (_prompt, options) => {
+      caps.push(options.maxOutputTokens)
+      return answerOf('NO FINDINGS')
+    })
+    const run = await runVerification(thread, 'm4')
+
+    if (!run.started) throw new Error('not started')
+    expect(caps).toEqual([16384])
+    expect(run.record.maxOutputTokens).toBe(16384)
   })
 
   it('records a verification that found nothing, and adds no version', async () => {
