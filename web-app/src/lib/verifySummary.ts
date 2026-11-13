@@ -18,7 +18,12 @@ const count = (n: number, one: string, many = `${one}s`) =>
 export function summarizeVerification(
   record: VerificationRecord
 ): VerificationSummary {
-  const cut = record.truncated ? '; the output was cut by the token cap' : ''
+  const cut =
+    (record.truncated ? '; the output was cut by the token cap' : '') +
+    // With no findings it is said in the sentence itself, below.
+    (record.reasoningCut && record.outcome !== 'no-findings'
+      ? '; the reasoning was cut short, the check may be incomplete'
+      : '')
   switch (record.outcome) {
     case 'findings': {
       const valid = record.entries.filter((entry) => entry.valid)
@@ -35,10 +40,17 @@ export function summarizeVerification(
       }
     }
     case 'no-findings':
-      return {
-        tone: 'clean',
-        text: `the verifier reported no findings${cut}`,
-      }
+      // Nothing found by a verifier that was stopped on the way is not a
+      // clean result.
+      return record.reasoningCut
+        ? {
+            tone: 'problem',
+            text: `the verifier reported no findings, but its reasoning was cut short: the check may be incomplete${cut}`,
+          }
+        : {
+            tone: 'clean',
+            text: `the verifier reported no findings${cut}`,
+          }
     case 'nothing-valid':
       return {
         tone: 'problem',

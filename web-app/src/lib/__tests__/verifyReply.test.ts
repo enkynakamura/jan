@@ -8,6 +8,7 @@ import {
 } from '@janhq/core'
 import { CONTRADICTED_MARK, UNVERIFIED_MARK } from '../verifyMarks'
 import {
+  REASONING_CLOSED,
   VERIFY_MAX_OUTPUT_TOKENS,
   verifyReply,
   type AskVerifier,
@@ -142,7 +143,7 @@ describe('verifyReply: what the verifier is asked', () => {
       abortSignal: controller.signal,
       onProgress,
     })
-    expect(VERIFY_MAX_OUTPUT_TOKENS).toBe(8192)
+    expect(VERIFY_MAX_OUTPUT_TOKENS).toBe(32768)
   })
 
   it('does not ask when the turn has no tool result', async () => {
@@ -158,7 +159,7 @@ describe('verifyReply: what the verifier is asked', () => {
         at: 1000,
         outcome: 'no-sources',
         seconds: 2.5,
-        maxOutputTokens: 8192,
+        maxOutputTokens: VERIFY_MAX_OUTPUT_TOKENS,
         truncated: false,
         toolCalls: [],
         output: '',
@@ -191,7 +192,7 @@ describe('verifyReply: findings', () => {
       at: 1000,
       outcome: 'findings',
       seconds: 2.5,
-      maxOutputTokens: 8192,
+      maxOutputTokens: VERIFY_MAX_OUTPUT_TOKENS,
       truncated: false,
       model,
       servedModel: 'q8-served',
@@ -339,6 +340,46 @@ describe('verifyReply: a reply that was already marked', () => {
   })
 })
 
+// The engine gives the reasoning a share of the output cap and closes it
+// there. A verifier closed half-way writes its answer all the same.
+describe('verifyReply: a reasoning the engine closed', () => {
+  const closed = (reasoning: string, output = 'NO FINDINGS') =>
+    verifyReply([request, reply], answering(output, { reasoning }))
+
+  it('says so when the reasoning ends with the words of the engine', async () => {
+    for (const reasoning of [
+      `Point 3 is supported. Point 4: "the bridge\n\n${REASONING_CLOSED}`,
+      `${REASONING_CLOSED}\n\n `,
+    ]) {
+      const { record } = await closed(reasoning)
+      expect(record).toMatchObject({
+        outcome: 'no-findings',
+        reasoningCut: true,
+      })
+    }
+    // With findings too: there may be more.
+    const found = await closed(`x ${REASONING_CLOSED}`, lines(contradicted))
+    expect(found.record).toMatchObject({
+      outcome: 'findings',
+      reasoningCut: true,
+    })
+  })
+
+  it('does not say so of a reasoning that ended on its own', async () => {
+    for (const reasoning of [
+      'I compared each sentence.',
+      '',
+      // The words are there, not at the end: the verifier went on.
+      `${REASONING_CLOSED} One more check: the length is supported.`,
+      REASONING_CLOSED.slice(0, -1),
+    ]) {
+      const { record } = await closed(reasoning)
+      expect(record.outcome).toBe('no-findings')
+      expect(record).not.toHaveProperty('reasoningCut')
+    }
+  })
+})
+
 describe('verifyReply: when it does not go as planned', () => {
   it('says so when the verifier calls a tool instead of answering, and marks nothing', async () => {
     const result = await verifyReply(
@@ -379,12 +420,14 @@ describe('verifyReply: when it does not go as planned', () => {
     // An engine can say `stop` for an answer it cut: the tokens tell.
     const byTokens = await verifyReply(
       [request, reply],
-      answering(lines(contradicted), { outputTokens: 8192 })
+      answering(lines(contradicted), { outputTokens: VERIFY_MAX_OUTPUT_TOKENS })
     )
     expect(byTokens.record.truncated).toBe(true)
     const below = await verifyReply(
       [request, reply],
-      answering(lines(contradicted), { outputTokens: 8191 })
+      answering(lines(contradicted), {
+        outputTokens: VERIFY_MAX_OUTPUT_TOKENS - 1,
+      })
     )
     expect(below.record.truncated).toBe(false)
     const unknown = await verifyReply(
@@ -434,7 +477,7 @@ describe('verifyReply: when it does not go as planned', () => {
         at: 1000,
         outcome: 'error',
         seconds: 2.5,
-        maxOutputTokens: 8192,
+        maxOutputTokens: VERIFY_MAX_OUTPUT_TOKENS,
         truncated: false,
         toolCalls: [],
         output: '',

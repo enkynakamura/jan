@@ -21,11 +21,22 @@ import { buildPacket, verifyRequest } from '@/lib/verifyTurn'
 
 /**
  * The output cap of the verifier. The engine closes the reasoning at about
- * three quarters of the cap and the verifier uses all of that, so the cap
- * sets how long it thinks: 8192 leaves 6144 tokens for reasoning and 2048 for
- * the findings. Of the two values tried (8192 and 32768) it found more.
+ * three quarters of the cap, so the cap sets how long the verifier can think:
+ * 32768 leaves 24576 tokens for reasoning. With 8192, which leaves 6144, a
+ * verifier going through a reply of five paragraphs against the sources of a
+ * conversation was closed at the fourth, twice, and answered all the same.
+ * The first trials, of single turns, had found more with 8192 than with
+ * 32768: one run each, with another model.
  */
-export const VERIFY_MAX_OUTPUT_TOKENS = 8192
+export const VERIFY_MAX_OUTPUT_TOKENS = 32768
+
+/**
+ * What the Strata engines write at the end of a reasoning they close because
+ * it has used its share of the output cap. An engine that closes it without
+ * saying so is not recognised.
+ */
+export const REASONING_CLOSED =
+  'I have thought about this long enough; time to give my answer.'
 
 export type VerificationOutcome =
   /** At least one finding passed the checks. */
@@ -54,6 +65,12 @@ export type VerificationRecord = {
   maxOutputTokens: number
   /** The cap cut the output: findings may be missing. */
   truncated: boolean
+  /**
+   * The engine closed the reasoning before the verifier was done with it:
+   * the verifier may not have gone through the whole answer, whatever it
+   * then wrote. Absent when it was not, and in the records made before.
+   */
+  reasoningCut?: true
   /** The model selected for the thread, which the request named. */
   model?: { provider: string; id: string }
   /** The model the engine says it answered with. */
@@ -171,6 +188,9 @@ export async function verifyReply(
     toolInputs: answer.toolInputs,
     output: answer.text,
     reasoning: answer.reasoning,
+    ...(answer.reasoning.trimEnd().endsWith(REASONING_CLOSED)
+      ? { reasoningCut: true as const }
+      : {}),
   }
   if (answer.toolCalls.length > 0) return { record: record('tool-call', asked) }
 

@@ -149,6 +149,54 @@ describe('summarizeVerification', () => {
   })
 })
 
+describe('summarizeVerification: a reasoning the engine closed', () => {
+  const closed = (more: Partial<VerificationRecord>) =>
+    summarizeVerification(record({ reasoningCut: true, ...more }))
+
+  it('does not give as clean a check that found nothing and was cut short', () => {
+    expect(closed({ outcome: 'no-findings' })).toEqual({
+      tone: 'problem',
+      text: 'the verifier reported no findings, but its reasoning was cut short: the check may be incomplete',
+    })
+    // Without the cut it is clean, as before.
+    expect(summarizeVerification(record({ outcome: 'no-findings' }))).toEqual({
+      tone: 'clean',
+      text: 'the verifier reported no findings',
+    })
+  })
+
+  it('says with the findings that there may be more', () => {
+    expect(
+      closed({ outcome: 'findings', entries: [valid(1)], marks: 1 })
+    ).toEqual({
+      tone: 'findings',
+      text: '1 finding; 1 mark written; the reasoning was cut short, the check may be incomplete',
+    })
+    expect(closed({ outcome: 'unreadable' }).text).toBe(
+      'the verifier wrote neither findings nor NO FINDINGS; the reasoning was cut short, the check may be incomplete'
+    )
+    expect(closed({ outcome: 'nothing-valid', entries: [prose] }).text).toBe(
+      '1 entry listed, none passed the checks; the reasoning was cut short, the check may be incomplete'
+    )
+  })
+
+  it('says both when the output was cut too', () => {
+    expect(closed({ outcome: 'no-findings', truncated: true }).text).toBe(
+      'the verifier reported no findings, but its reasoning was cut short: the check may be incomplete; the output was cut by the token cap'
+    )
+    expect(
+      closed({
+        outcome: 'findings',
+        entries: [valid(1)],
+        marks: 1,
+        truncated: true,
+      }).text
+    ).toBe(
+      '1 finding; 1 mark written; the output was cut by the token cap; the reasoning was cut short, the check may be incomplete'
+    )
+  })
+})
+
 describe('SOURCE_DOUBT_LABELS', () => {
   it('has words for every doubt, all different', () => {
     expect(Object.keys(SOURCE_DOUBT_LABELS).sort()).toEqual([
