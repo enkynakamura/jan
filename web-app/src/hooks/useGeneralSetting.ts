@@ -15,6 +15,8 @@ type GeneralSettingState = {
   stripReasoningFromContext: boolean
   // Fork: the output cap of the verifier of a reply (see verifyReply).
   verifyMaxOutputTokens: number
+  // Fork: how many times a reply is verified at each click (see verifySeries).
+  verifyRepetitions: number
   huggingfaceToken?: string
   setHuggingfaceToken: (token: string) => void
   setSpellCheckChatInput: (value: boolean) => void
@@ -22,6 +24,7 @@ type GeneralSettingState = {
   setAutoUpdateCheck: (value: boolean) => void
   setStripReasoningFromContext: (value: boolean) => void
   setVerifyMaxOutputTokens: (value: number) => void
+  setVerifyRepetitions: (value: number) => void
   setCurrentLanguage: (value: Language) => void
 }
 
@@ -34,6 +37,7 @@ export const useGeneralSetting = create<GeneralSettingState>()(
       autoUpdateCheck: true,
       stripReasoningFromContext: false,
       verifyMaxOutputTokens: VERIFY_MAX_OUTPUT_TOKENS,
+      verifyRepetitions: 1,
       huggingfaceToken: undefined,
       setSpellCheckChatInput: (value) => set({ spellCheckChatInput: value }),
       setTokenCounterCompact: (value) => set({ tokenCounterCompact: value }),
@@ -42,6 +46,7 @@ export const useGeneralSetting = create<GeneralSettingState>()(
         set({ stripReasoningFromContext: value }),
       setVerifyMaxOutputTokens: (value) =>
         set({ verifyMaxOutputTokens: value }),
+      setVerifyRepetitions: (value) => set({ verifyRepetitions: value }),
       setCurrentLanguage: (value) => set({ currentLanguage: value }),
       setHuggingfaceToken: (token) => {
         set({ huggingfaceToken: token })
@@ -88,6 +93,7 @@ export const useGeneralSetting = create<GeneralSettingState>()(
         autoUpdateCheck: state.autoUpdateCheck,
         stripReasoningFromContext: state.stripReasoningFromContext,
         verifyMaxOutputTokens: state.verifyMaxOutputTokens,
+        verifyRepetitions: state.verifyRepetitions,
       }),
     }
   )

@@ -15,11 +15,8 @@ import {
   hasBranching,
   withActiveChild,
 } from '@/lib/message-branching'
-import {
-  verifyReply,
-  type AskVerifier,
-  type VerificationRecord,
-} from '@/lib/verifyReply'
+import type { AskVerifier, VerificationRecord } from '@/lib/verifyReply'
+import { verifySeries } from '@/lib/verifySeries'
 import {
   markedVersion,
   pathToVerify,
@@ -39,6 +36,8 @@ export type VerificationThread = {
   ask: AskVerifier
   /** The output cap of the verifier: the setting, as it is at the click. */
   maxOutputTokens: number
+  /** How many times the reply is verified: the setting, as it is at the click. */
+  repetitions: number
   updateMessage: (message: ThreadMessage) => void
   addMessage: (message: ThreadMessage) => void
   /** Puts on screen the conversation as it is stored now. */
@@ -78,9 +77,13 @@ export async function runVerification(
   const controller = new AbortController()
   useVerification.getState().start(replyId, thread.id, controller)
   let refreshed = -Infinity
-  let verification: Awaited<ReturnType<typeof verifyReply>>
+  let verification: Awaited<ReturnType<typeof verifySeries>>
   try {
-    verification = await verifyReply(path, thread.ask, {
+    verification = await verifySeries(path, thread.ask, {
+      repetitions: thread.repetitions,
+      onRun: (run, of) => {
+        if (of > 1) useVerification.getState().step(replyId, run, of)
+      },
       maxOutputTokens: thread.maxOutputTokens,
       abortSignal: controller.signal,
       onProgress: (characters) => {

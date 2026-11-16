@@ -1984,8 +1984,9 @@ function ThreadDetail() {
             )
           },
           ask: (prompt, options) => transport.sideRequest(prompt, options),
-          // The setting as it is at the click.
+          // The settings as they are at the click.
           maxOutputTokens: useGeneralSetting.getState().verifyMaxOutputTokens,
+          repetitions: useGeneralSetting.getState().verifyRepetitions,
           updateMessage,
           addMessage,
           show: () => {

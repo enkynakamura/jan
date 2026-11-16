@@ -115,6 +115,7 @@ function threadOf(initial: ThreadMessage[], ask: AskVerifier) {
     busy: () => state.busy,
     ask,
     maxOutputTokens: 16384,
+    repetitions: 1,
     updateMessage: (next) => {
       state.updated.push(next.id)
       state.stored = state.stored.map((m) => (m.id === next.id ? next : m))
@@ -312,6 +313,84 @@ describe('runVerification', () => {
     if (!run.started) throw new Error('not started')
     expect(caps).toEqual([16384])
     expect(run.record.maxOutputTokens).toBe(16384)
+  })
+
+  it('verifies as many times as the thread asks, and writes the series once', async () => {
+    const [first, second] = FINDINGS.split('\n')
+    const outputs = [first, 'NO FINDINGS', `${second}\n${first}`]
+    const steps: Array<{ run: number; of: number } | undefined> = []
+    const { thread, state } = threadOf(withSource(), async () => {
+      steps.push(verification().running.m4.series)
+      return answerOf(outputs[steps.length - 1])
+    })
+    thread.repetitions = 3
+    const run = await runVerification(thread, 'm4')
+
+    // Each run was seen starting, with its number.
+    expect(steps).toEqual([
+      { run: 1, of: 3 },
+      { run: 2, of: 3 },
+      { run: 3, of: 3 },
+    ])
+    expect(run).toMatchObject({ started: true, version: 'shown' })
+    if (!run.started) throw new Error('not started')
+    expect(run.record.runs).toHaveLength(3)
+    expect(run.record.entries.map((entry) => entry.runs)).toEqual([2, 1])
+
+    // One record for the series, one version with the marks of all the runs.
+    expect(verificationsOf(byId(state.stored, 'm4').metadata)).toEqual([
+      run.record,
+    ])
+    expect(state.stored.map((m) => m.id)).toEqual([
+      'm1',
+      'm2',
+      'm3',
+      'm4',
+      'n1',
+    ])
+    expect(byId(state.stored, 'n1').content[2].text?.value).toBe(MARKED)
+    // Every message was written once: the thread had no versions before.
+    expect(state.updated).toEqual(['m1', 'm2', 'm3', 'm4'])
+    expect(verification().running).toEqual({})
+    expect(verification().records).toEqual({ m4: run.record })
+  })
+
+  it('says nothing of runs when the reply is verified once', async () => {
+    let seen: unknown = 'not asked'
+    const { thread } = threadOf(withSource(), async () => {
+      seen = verification().running.m4.series
+      return answerOf('NO FINDINGS')
+    })
+    await runVerification(thread, 'm4')
+
+    expect(seen).toBeUndefined()
+  })
+
+  it('stops a series at the run that is being made, and keeps the runs made', async () => {
+    const [first] = FINDINGS.split('\n')
+    let asked = 0
+    const { thread, state } = threadOf(
+      withSource(),
+      async (_prompt, options) => {
+        if (++asked === 1) return answerOf(first)
+        verification().stop('m4')
+        expect(options.abortSignal?.aborted).toBe(true)
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+      }
+    )
+    thread.repetitions = 3
+    const run = await runVerification(thread, 'm4')
+
+    expect(asked).toBe(2)
+    if (!run.started) throw new Error('not started')
+    expect(run.record.runs?.map((one) => one.outcome)).toEqual([
+      'findings',
+      'stopped',
+    ])
+    expect(run.version).toBe('shown')
+    expect(byId(state.stored, 'n1').content[2].text?.value).toContain(
+      'in 1932. (contraddetto dalla fonte)'
+    )
   })
 
   it('records a verification that found nothing, and adds no version', async () => {

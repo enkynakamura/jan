@@ -15,9 +15,67 @@ export type VerificationSummary = {
 const count = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`
 
-export function summarizeVerification(
-  record: VerificationRecord
+/** A series of runs (see `verifySeries`): what they found together. */
+function summarizeSeries(
+  record: VerificationRecord,
+  runs: VerificationRecord[]
 ): VerificationSummary {
+  const last = runs[runs.length - 1]
+  const done = runs.filter(
+    (run) => run.outcome !== 'stopped' && run.outcome !== 'error'
+  )
+  const asked = record.repetitions ?? runs.length
+  const head =
+    done.length === asked
+      ? count(done.length, 'run')
+      : `${done.length} of ${count(asked, 'run')} (${
+          last.outcome === 'stopped' ? 'stopped' : `failed: ${last.error}`
+        })`
+  const valid = record.entries.filter((entry) => entry.valid)
+  const unmarked = valid.filter((entry) => entry.occurrences === 0).length
+  const main =
+    record.outcome === 'findings'
+      ? count(valid.length, 'finding') +
+        `; ${count(record.marks, 'mark')} written` +
+        (unmarked > 0 ? `; ${unmarked} could not be marked` : '')
+      : record.outcome === 'no-findings'
+        ? 'no findings in any run'
+        : 'no finding passed the checks'
+  const unusable = done.filter(
+    (run) => run.outcome !== 'findings' && run.outcome !== 'no-findings'
+  ).length
+  const cutShort = done.filter((run) => run.reasoningCut).length
+  const capped = done.filter((run) => run.truncated).length
+  return {
+    tone:
+      record.outcome === 'findings'
+        ? 'findings'
+        : record.outcome === 'no-findings' &&
+            done.length === asked &&
+            cutShort === 0
+          ? 'clean'
+          : 'problem',
+    text:
+      `${head}: ${main}` +
+      (unusable > 0 ? `; ${count(unusable, 'run')} gave nothing usable` : '') +
+      (cutShort > 0
+        ? `; the reasoning was cut short in ${count(cutShort, 'run')}`
+        : '') +
+      (capped > 0
+        ? `; the output was cut by the token cap in ${count(capped, 'run')}`
+        : ''),
+  }
+}
+
+/**
+ * `marks: false` for a run of a series: its findings are marked with those of
+ * the other runs, and the count is in the summary of the series.
+ */
+export function summarizeVerification(
+  record: VerificationRecord,
+  options: { marks?: boolean } = {}
+): VerificationSummary {
+  if (record.runs) return summarizeSeries(record, record.runs)
   const cut =
     (record.truncated ? '; the output was cut by the token cap' : '') +
     // With no findings it is said in the sentence itself, below.
@@ -34,8 +92,10 @@ export function summarizeVerification(
         text:
           count(valid.length, 'finding') +
           (discarded > 0 ? `, ${discarded} discarded` : '') +
-          `; ${count(record.marks, 'mark')} written` +
-          (unmarked > 0 ? `; ${unmarked} could not be marked` : '') +
+          (options.marks === false
+            ? ''
+            : `; ${count(record.marks, 'mark')} written` +
+              (unmarked > 0 ? `; ${unmarked} could not be marked` : '')) +
           cut,
       }
     }

@@ -48,6 +48,28 @@ describe('verification store', () => {
     expect(state().running).toBe(before)
   })
 
+  it('follows the runs of a series, counting the characters of each from zero', () => {
+    state().start('reply-1', 'thread-a', new AbortController())
+    expect(state().running['reply-1'].series).toBeUndefined()
+
+    state().progress('reply-1', 1200)
+    state().step('reply-1', 2, 5)
+    expect(state().running['reply-1']).toMatchObject({
+      threadId: 'thread-a',
+      characters: 0,
+      series: { run: 2, of: 5 },
+    })
+    state().progress('reply-1', 40)
+    expect(state().running['reply-1']).toMatchObject({
+      characters: 40,
+      series: { run: 2, of: 5 },
+    })
+
+    const before = state().running
+    state().step('reply-2', 1, 5)
+    expect(state().running).toBe(before)
+  })
+
   it('stops the verification of a reply, which is over at once', () => {
     const controller = new AbortController()
     const other = new AbortController()

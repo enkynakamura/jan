@@ -7,6 +7,8 @@ type RunningVerification = {
   /** The characters the verifier has written so far, reasoning included. */
   characters: number
   controller: AbortController
+  /** In a series of runs: which one is being made, from 1, and of how many. */
+  series?: { run: number; of: number }
 }
 
 type VerificationState = {
@@ -24,6 +26,8 @@ type VerificationState = {
     controller: AbortController
   ) => void
   progress: (messageId: string, characters: number) => void
+  /** A run of a series starts: the count of characters starts again. */
+  step: (messageId: string, run: number, of: number) => void
   /**
    * The verification that `controller` belongs to is over, whatever its
    * outcome. One that was stopped can end after the next one on the same
@@ -59,6 +63,17 @@ export const useVerification = create<VerificationState>()((set, get) => ({
       if (!entry) return state
       return {
         running: { ...state.running, [messageId]: { ...entry, characters } },
+      }
+    }),
+  step: (messageId, run, of) =>
+    set((state) => {
+      const entry = state.running[messageId]
+      if (!entry) return state
+      return {
+        running: {
+          ...state.running,
+          [messageId]: { ...entry, characters: 0, series: { run, of } },
+        },
       }
     }),
   finish: (messageId, controller) =>

@@ -295,6 +295,20 @@ describe('VerificationPanel', () => {
     expect(screen.getByTestId('verification')).toBeInTheDocument()
   })
 
+  it('says which run of a series is being made', () => {
+    render(<VerificationPanel message={message()} />)
+    act(() => {
+      useVerification
+        .getState()
+        .start('reply-1', 'thread-a', new AbortController())
+      useVerification.getState().step('reply-1', 2, 5)
+      useVerification.getState().progress('reply-1', 1200)
+    })
+    expect(screen.getByTestId('verification-running')).toHaveTextContent(
+      'Verifying, run 2 of 5: 1,200 characters so far'
+    )
+  })
+
   it('does not show the verification of another reply', () => {
     act(() => {
       useVerification.getState().setRecord('reply-2', record())
@@ -304,6 +318,107 @@ describe('VerificationPanel', () => {
     })
     const { container } = render(<VerificationPanel message={message()} />)
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('VerificationDetails: a series of runs', () => {
+  const [first, second] = record().entries
+  const series = record({
+    seconds: 900,
+    outputTokens: 60000,
+    entries: [
+      { ...first, runs: 2 },
+      { ...second, occurrences: 1, runs: 1 },
+    ],
+    marks: 2,
+    repetitions: 4,
+    runs: [
+      record({ entries: [first], marks: 1 }),
+      record({ outcome: 'no-findings', entries: [], marks: 0 }),
+      record({ entries: [second, first], marks: 2 }),
+      record({ outcome: 'stopped', entries: [], marks: 0 }),
+    ],
+  })
+  // The statements of the series itself, without those of the runs under it.
+  const ownItems = (details: HTMLElement) =>
+    Array.from(details.children)
+      .filter((child) => child.localName === 'ol')
+      .flatMap((list) => Array.from(list.children))
+
+  it('says for each statement in how many of the runs made it was reported', () => {
+    render(<VerificationDetails record={series} />)
+    const details = screen.getByTestId('verification')
+    const items = ownItems(details)
+
+    expect(details.querySelector('summary')).toHaveTextContent(
+      'Verification: 3 of 4 runs (stopped): 2 findings; 2 marks written · q8-model · 900 s · 60,000 tokens'
+    )
+    expect(items).toHaveLength(2)
+    expect(items[0]).toHaveTextContent(
+      'Contradicted by the source · reported in 2 of 3 runs'
+    )
+    expect(items[1]).toHaveTextContent(
+      'Not supported by the sources · reported in 1 of 3 runs'
+    )
+  })
+
+  it('keeps every run under the series, with what it found by itself', () => {
+    render(<VerificationDetails record={series} />)
+    const runs = screen.getAllByTestId('verification-run')
+
+    expect(runs.map((run) => run.getAttribute('data-outcome'))).toEqual([
+      'findings',
+      'no-findings',
+      'findings',
+      'stopped',
+    ])
+    expect(runs[0].querySelector('summary')).toHaveTextContent(
+      'Run 1: 1 finding · q8-model · 248 s · 6,435 tokens'
+    )
+    expect(runs[1].querySelector('summary')).toHaveTextContent(
+      'Run 2: the verifier reported no findings'
+    )
+    expect(runs[2].querySelectorAll('li')).toHaveLength(2)
+    expect(runs[2]).not.toHaveTextContent('reported in')
+    expect(runs[3].querySelector('summary')).toHaveTextContent('Run 4: stopped')
+    // The series is the only verification shown as such.
+    expect(screen.getAllByTestId('verification')).toHaveLength(1)
+  })
+
+  it('counts out the run at which the series failed', () => {
+    render(
+      <VerificationDetails
+        record={record({
+          entries: [{ ...first, runs: 1 }],
+          marks: 1,
+          error: 'engine down',
+          repetitions: 3,
+          runs: [
+            record({ entries: [first], marks: 1 }),
+            record({ outcome: 'no-findings', entries: [], marks: 0 }),
+            record({
+              outcome: 'error',
+              entries: [],
+              marks: 0,
+              error: 'engine down',
+            }),
+          ],
+        })}
+      />
+    )
+
+    expect(ownItems(screen.getByTestId('verification'))[0]).toHaveTextContent(
+      'reported in 1 of 2 runs'
+    )
+  })
+
+  it('says nothing of runs for a reply verified once', () => {
+    render(<VerificationDetails record={record()} />)
+
+    expect(screen.getByTestId('verification')).not.toHaveTextContent(
+      'reported in'
+    )
+    expect(screen.queryByTestId('verification-run')).not.toBeInTheDocument()
   })
 })
 

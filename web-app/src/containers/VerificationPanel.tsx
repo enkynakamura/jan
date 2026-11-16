@@ -22,8 +22,17 @@ const VERDICTS: Record<string, string> = {
 const asText = (value: unknown) =>
   typeof value === 'string' ? value : JSON.stringify(value)
 
-/** One piece of the verifier's output: a finding, or whatever else it wrote. */
-function Entry({ entry }: { entry: VerificationRecord['entries'][number] }) {
+/**
+ * One piece of the verifier's output: a finding, or whatever else it wrote.
+ * `of`: in the record of a series, how many runs were made.
+ */
+function Entry({
+  entry,
+  of,
+}: {
+  entry: VerificationRecord['entries'][number]
+  of?: number
+}) {
   const finding = entry.finding
   if (!finding) {
     return (
@@ -48,6 +57,12 @@ function Entry({ entry }: { entry: VerificationRecord['entries'][number] }) {
               <span className="font-normal text-muted-foreground">
                 {' '}
                 (not marked: the quote runs across two blocks of text)
+              </span>
+            )}
+            {entry.runs !== undefined && (
+              <span className="font-normal text-muted-foreground">
+                {' '}
+                · reported in {entry.runs} of {of} runs
               </span>
             )}
           </>
@@ -108,13 +123,22 @@ function Unread({ record }: { record: VerificationRecord }) {
   )
 }
 
-/** What one verification found, folded under a one-line summary. */
+/**
+ * What one verification found, folded under a one-line summary. `run`: its
+ * number, when it is a run of a series shown under the series.
+ */
 export function VerificationDetails({
   record,
+  run,
 }: {
   record: VerificationRecord
+  run?: number
 }) {
-  const summary = summarizeVerification(record)
+  const summary = summarizeVerification(record, { marks: run === undefined })
+  // The runs that were made to the end: the ones a statement can be in.
+  const made = record.runs?.filter(
+    (one) => one.outcome !== 'stopped' && one.outcome !== 'error'
+  ).length
   const facts = [
     // The engine's own word for the model, when it gave one: the name
     // selected in the app can be that of a model that is no longer loaded.
@@ -125,7 +149,7 @@ export function VerificationDetails({
   ].filter(Boolean)
   return (
     <details
-      data-testid="verification"
+      data-testid={run === undefined ? 'verification' : 'verification-run'}
       data-outcome={record.outcome}
       className="mt-2 rounded-md border px-3 py-2 text-xs"
     >
@@ -136,13 +160,16 @@ export function VerificationDetails({
             : 'cursor-pointer'
         }
       >
-        <span className="font-medium">Verification:</span> {summary.text}
+        <span className="font-medium">
+          {run === undefined ? 'Verification:' : `Run ${run}:`}
+        </span>{' '}
+        {summary.text}
         <span className="text-muted-foreground"> · {facts.join(' · ')}</span>
       </summary>
       {record.entries.length > 0 && (
         <ol className="mt-2 list-decimal space-y-2 pl-5 select-text">
           {record.entries.map((entry, i) => (
-            <Entry key={i} entry={entry} />
+            <Entry key={i} entry={entry} of={made} />
           ))}
         </ol>
       )}
@@ -150,6 +177,9 @@ export function VerificationDetails({
         (record.outcome === 'tool-call' || record.outcome === 'unreadable') && (
           <Unread record={record} />
         )}
+      {record.runs?.map((one, i) => (
+        <VerificationDetails key={i} record={one} run={i + 1} />
+      ))}
     </details>
   )
 }
@@ -203,8 +233,10 @@ export function VerificationPanel({ message }: { message: UIMessage }) {
         className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"
       >
         <IconLoader2 size={14} className="animate-spin" />
-        Verifying: {running.characters.toLocaleString('en-US')} characters so
-        far
+        Verifying
+        {running.series &&
+          `, run ${running.series.run} of ${running.series.of}`}
+        : {running.characters.toLocaleString('en-US')} characters so far
       </div>
     )
   }

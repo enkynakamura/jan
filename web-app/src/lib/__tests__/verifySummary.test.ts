@@ -210,6 +210,127 @@ describe('SOURCE_DOUBT_LABELS', () => {
   })
 })
 
+describe('summarizeVerification: a series of runs', () => {
+  const run = (more: Partial<VerificationRecord> = {}) => record(more)
+  const found = run({ outcome: 'findings', entries: [valid(1)], marks: 1 })
+  const series = (
+    runs: VerificationRecord[],
+    more: Partial<VerificationRecord> = {}
+  ) => record({ repetitions: runs.length, runs, ...more })
+
+  it('says how many runs, and what they found together', () => {
+    expect(
+      summarizeVerification(
+        series([found, run(), found], {
+          outcome: 'findings',
+          entries: [valid(1), valid(2)],
+          marks: 3,
+        })
+      )
+    ).toEqual({ tone: 'findings', text: '3 runs: 2 findings; 3 marks written' })
+    expect(
+      summarizeVerification(
+        series([found, found], {
+          outcome: 'findings',
+          entries: [valid(0)],
+          marks: 0,
+        })
+      ).text
+    ).toBe('2 runs: 1 finding; 0 marks written; 1 could not be marked')
+  })
+
+  it('is clean only when every run was made and none found or lost anything', () => {
+    expect(
+      summarizeVerification(series([run(), run()], { outcome: 'no-findings' }))
+    ).toEqual({ tone: 'clean', text: '2 runs: no findings in any run' })
+    expect(
+      summarizeVerification(
+        series([run(), run({ reasoningCut: true }), run({ truncated: true })], {
+          outcome: 'no-findings',
+        })
+      )
+    ).toEqual({
+      tone: 'problem',
+      text: '3 runs: no findings in any run; the reasoning was cut short in 1 run; the output was cut by the token cap in 1 run',
+    })
+  })
+
+  it('says how many runs gave nothing usable', () => {
+    const unreadable = run({ outcome: 'unreadable' })
+    const toolCall = run({ outcome: 'tool-call', toolCalls: ['x'] })
+    expect(
+      summarizeVerification(
+        series([run(), unreadable, toolCall], { outcome: 'nothing-valid' })
+      )
+    ).toEqual({
+      tone: 'problem',
+      text: '3 runs: no finding passed the checks; 2 runs gave nothing usable',
+    })
+    expect(
+      summarizeVerification(
+        series([found, unreadable], {
+          outcome: 'findings',
+          entries: [valid(1)],
+          marks: 1,
+        })
+      )
+    ).toEqual({
+      tone: 'findings',
+      text: '2 runs: 1 finding; 1 mark written; 1 run gave nothing usable',
+    })
+  })
+
+  it('says when the series was stopped or failed before its last run', () => {
+    expect(
+      summarizeVerification(
+        series([found, run({ outcome: 'stopped' })], {
+          outcome: 'findings',
+          entries: [valid(1)],
+          marks: 1,
+          repetitions: 5,
+        })
+      )
+    ).toEqual({
+      tone: 'findings',
+      text: '1 of 5 runs (stopped): 1 finding; 1 mark written',
+    })
+    expect(
+      summarizeVerification(
+        series(
+          [run(), run(), run({ outcome: 'error', error: 'engine down' })],
+          {
+            outcome: 'no-findings',
+            error: 'engine down',
+            repetitions: 4,
+          }
+        )
+      )
+    ).toEqual({
+      tone: 'problem',
+      text: '2 of 4 runs (failed: engine down): no findings in any run',
+    })
+  })
+
+  it('leaves the marks out of the words for a run of a series', () => {
+    expect(summarizeVerification(found, { marks: false }).text).toBe(
+      '1 finding'
+    )
+    expect(summarizeVerification(found).text).toBe('1 finding; 1 mark written')
+    expect(
+      summarizeVerification(
+        run({
+          outcome: 'findings',
+          entries: [valid(0), discarded],
+          reasoningCut: true,
+        }),
+        { marks: false }
+      ).text
+    ).toBe(
+      '1 finding, 1 discarded; the reasoning was cut short, the check may be incomplete'
+    )
+  })
+})
+
 describe('REJECTION_LABELS', () => {
   it('has words for every reason, all different', () => {
     const labels = Object.values(REJECTION_LABELS)

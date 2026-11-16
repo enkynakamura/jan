@@ -94,12 +94,18 @@ export type VerificationRecord = {
   /**
    * Every piece of the output, with the reason it was discarded. A finding
    * that passed the checks also has in how many places its quote was found
-   * in the text parts: zero means it left no mark.
+   * in the text parts: zero means it left no mark. In the record of a series
+   * the entries are the statements reported, each once, with in how many of
+   * the runs it was reported (see `verifySeries`).
    */
-  entries: Array<FindingEntry & { occurrences?: number }>
+  entries: Array<FindingEntry & { occurrences?: number; runs?: number }>
   /** How many marks were written. */
   marks: number
   error?: string
+  /** In the record of a series: how many runs were asked for. */
+  repetitions?: number
+  /** In the record of a series: the record of each run made, whole. */
+  runs?: VerificationRecord[]
 }
 
 /** Sends the request to the verifier model: `CustomChatTransport.sideRequest`. */

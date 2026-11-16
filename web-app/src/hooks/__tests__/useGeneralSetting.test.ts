@@ -91,6 +91,25 @@ describe('useGeneralSetting', () => {
     })
   })
 
+  // Fork: how many times a reply is verified at each click.
+  describe('setVerifyRepetitions', () => {
+    it('should start from one verification for each click', () => {
+      const { result } = renderHook(() => useGeneralSetting())
+
+      expect(result.current.verifyRepetitions).toBe(1)
+    })
+
+    it('should set the repetitions of the verification', () => {
+      const { result } = renderHook(() => useGeneralSetting())
+
+      act(() => {
+        result.current.setVerifyRepetitions(5)
+      })
+
+      expect(result.current.verifyRepetitions).toBe(5)
+    })
+  })
+
   describe('setCurrentLanguage', () => {
     it('should set language to English', () => {
       const { result } = renderHook(() => useGeneralSetting())
